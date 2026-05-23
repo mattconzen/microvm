@@ -41,6 +41,8 @@ type Backend struct {
 	invoker  Invoker
 	control  Controller
 	identity IdentityResolver
+	creds    CredentialsProvider // for SigV4-signed WebSocket handshakes (shell)
+	region   string              // resolved AWS region for SigV4 signing
 	now      func() time.Time
 }
 
@@ -64,12 +66,15 @@ func FromConfig(ctx context.Context, cfg *config.Config) (*Backend, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load aws config: %w", err)
 	}
-	return New(
+	b := New(
 		cfg,
 		bedrockagentcore.NewFromConfig(awscfg),
 		bedrockagentcorecontrol.NewFromConfig(awscfg),
 		sts.NewFromConfig(awscfg),
-	), nil
+	)
+	b.creds = awscfg.Credentials
+	b.region = awscfg.Region
+	return b, nil
 }
 
 func (b *Backend) Name() string { return "aws" }
@@ -240,32 +245,33 @@ func (b *Backend) CopyFrom(ctx context.Context, sb backend.Sandbox, remotePath, 
 	return int64(len(data)), nil
 }
 
+// Shell opens a full-duplex PTY session over the AgentCore WebSocket
+// invocation endpoint. IAM note: the caller's role needs
+// bedrock-agentcore:InvokeAgentRuntimeWithWebSocketStream in addition to the
+// usual InvokeAgentRuntime permission.
 func (b *Backend) Shell(ctx context.Context, sb backend.Sandbox, tty backend.TTY) (err error) {
 	t := obs.Time(ctx, obs.MetricShellSession, "provider:aws")
 	defer t.Done(&err)
 
-	req, err := ShellRequest(tty.Cols, tty.Rows)
-	if err != nil {
-		return err
+	if b.cfg.AWS.AgentRuntimeArn == "" {
+		return errors.New("aws backend: agent runtime ARN not configured")
 	}
-	apiT := obs.Time(ctx, obs.MetricAPICall, "provider:aws", "op:InvokeAgentRuntime")
-	out, err := b.invoker.InvokeAgentRuntime(ctx, &bedrockagentcore.InvokeAgentRuntimeInput{
-		AgentRuntimeArn:  awssdk.String(b.cfg.AWS.AgentRuntimeArn),
-		RuntimeSessionId: awssdk.String(sb.SessionID),
-		ContentType:      awssdk.String("application/json"),
-		Accept:           awssdk.String("text/event-stream"),
-		Payload:          req,
-	})
+	if b.creds == nil {
+		return errors.New("aws backend: no credentials provider configured for shell")
+	}
+	region := b.region
+	if region == "" {
+		region = b.cfg.AWS.Region
+	}
+	apiT := obs.Time(ctx, obs.MetricAPICall, "provider:aws", "op:InvokeAgentRuntimeWithWebSocketStream")
+	creds, err := b.creds.Retrieve(ctx)
+	if err != nil {
+		apiT.Done(&err)
+		return fmt.Errorf("retrieve aws credentials: %w", err)
+	}
+	err = runShell(ctx, shellWsDial, region, b.cfg.AWS.AgentRuntimeArn, sb.SessionID, creds, b.now(), nil, tty.In, tty.Out, tty.Cols, tty.Rows)
 	apiT.Done(&err)
-	if err != nil {
-		return err
-	}
-	defer out.Response.Close()
-	if tty.Out == nil {
-		return errors.New("shell: no output sink")
-	}
-	_, copyErr := io.Copy(tty.Out, out.Response)
-	return copyErr
+	return err
 }
 
 func (b *Backend) Snapshot(ctx context.Context, sb backend.Sandbox, name string) (snap backend.Snapshot, err error) {

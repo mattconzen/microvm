@@ -11,7 +11,6 @@ const (
 	OpExec      Op = "exec"
 	OpPut       Op = "put"
 	OpGet       Op = "get"
-	OpShell     Op = "shell"
 	OpSnapshot  Op = "snapshot"
 	OpResume    Op = "resume"
 	OpTerminate Op = "terminate"
@@ -22,9 +21,6 @@ type Request struct {
 	Cmd   []string `json:"cmd,omitempty"`
 	Path  string   `json:"path,omitempty"`
 	B64   string   `json:"b64,omitempty"`
-	TTY   bool     `json:"tty,omitempty"`
-	Cols  uint16   `json:"cols,omitempty"`
-	Rows  uint16   `json:"rows,omitempty"`
 	Name  string   `json:"name,omitempty"`
 	Alias string   `json:"alias,omitempty"`
 }
@@ -78,10 +74,6 @@ func PutRequest(path string, data []byte) ([]byte, error) {
 
 func GetRequest(path string) ([]byte, error) {
 	return json.Marshal(Request{Op: OpGet, Path: path})
-}
-
-func ShellRequest(cols, rows uint16) ([]byte, error) {
-	return json.Marshal(Request{Op: OpShell, TTY: true, Cols: cols, Rows: rows})
 }
 
 func SnapshotRequest(name string) ([]byte, error) {

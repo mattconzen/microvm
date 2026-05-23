@@ -96,3 +96,37 @@ def test_terminate_returns_ok():
 def test_dispatch_terminate():
     out = app.dispatch({"op": "terminate"})
     assert out["ok"] is True
+
+
+def test_dispatch_no_longer_handles_shell():
+    # Shell now flows through the WebSocket entrypoint, not dispatch().
+    out = app.dispatch({"op": "shell"})
+    assert "unknown op" in out["error"]
+
+
+def test_parse_resize_dict():
+    assert app.parse_resize({"type": "resize", "cols": 80, "rows": 24}) == (80, 24)
+
+
+def test_parse_resize_json_str():
+    assert app.parse_resize('{"type":"resize","cols":132,"rows":50}') == (132, 50)
+
+
+def test_parse_resize_json_bytes():
+    assert app.parse_resize(b'{"type":"resize","cols":120,"rows":40}') == (120, 40)
+
+
+def test_parse_resize_rejects_other_types():
+    assert app.parse_resize({"type": "other", "cols": 80, "rows": 24}) is None
+    assert app.parse_resize({"cols": 80, "rows": 24}) is None
+    assert app.parse_resize("not json") is None
+    assert app.parse_resize({"type": "resize", "cols": 0, "rows": 24}) is None
+    assert app.parse_resize({"type": "resize", "cols": "huh", "rows": 24}) is None
+    assert app.parse_resize(123) is None
+
+
+def test_shell_session_callable_exists():
+    # Ensures the websocket handler is importable and async.
+    import inspect
+
+    assert inspect.iscoroutinefunction(app.shell_session)

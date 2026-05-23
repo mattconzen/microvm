@@ -1,30 +1,36 @@
 """Shell agent for microvm — interprets JSON envelopes inside the AgentCore microVM.
 
-Envelope:
+Envelopes (unary HTTP path, POST /invocations):
     {"op": "exec",      "cmd": ["sh", "-lc", "..."]}
     {"op": "put",       "path": "/tmp/x", "b64": "..."}
     {"op": "get",       "path": "/tmp/x"}
-    {"op": "shell",     "tty": true, "cols": 80, "rows": 24}
     {"op": "snapshot",  "name": "demo"}
     {"op": "resume",    "alias": "sess-1"}
     {"op": "terminate"}
 
-Responses are JSON dicts; "shell" yields raw PTY bytes as a stream.
+The interactive shell runs over the WebSocket path (`/ws`) instead of the
+unary envelope above. The Go CLI dials it with a SigV4-signed handshake.
 """
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import json
 import os
 import pty
-import select
+import signal
 import subprocess
-from typing import Any, Iterator
+from typing import Any
 
 try:
     from bedrock_agentcore import BedrockAgentCoreApp  # type: ignore
 except ImportError:  # pragma: no cover - allow tests without SDK installed
     BedrockAgentCoreApp = None  # type: ignore
+
+# Match the Go side: AgentCore caps each WebSocket frame at 32 KB; chunk reads
+# slightly below that so we stay clear of any per-frame envelope overhead.
+SHELL_READ_CHUNK = 30 * 1024
 
 
 def handle_exec(req: dict) -> dict:
@@ -76,13 +82,37 @@ def handle_get(req: dict) -> dict:
         return {"b64": "", "bytes": 0, "error": str(e)}
 
 
-def handle_shell(req: dict) -> Iterator[bytes]:
-    cols = int(req.get("cols", 80) or 80)
-    rows = int(req.get("rows", 24) or 24)
-    pid, fd = pty.fork()
-    if pid == 0:  # child
-        os.execvp("/bin/sh", ["/bin/sh", "-i"])
-        return
+def parse_resize(msg: Any) -> tuple[int, int] | None:
+    """Decode a {'type':'resize','cols':N,'rows':N} control message.
+
+    Accepts either a dict (already-decoded JSON) or a str/bytes payload.
+    Returns (cols, rows) or None if the message isn't a valid resize frame.
+    """
+    if isinstance(msg, (bytes, bytearray)):
+        try:
+            msg = msg.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    if isinstance(msg, str):
+        try:
+            msg = json.loads(msg)
+        except (ValueError, json.JSONDecodeError):
+            return None
+    if not isinstance(msg, dict):
+        return None
+    if msg.get("type") != "resize":
+        return None
+    try:
+        cols = int(msg.get("cols", 0) or 0)
+        rows = int(msg.get("rows", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    if cols <= 0 or rows <= 0:
+        return None
+    return cols, rows
+
+
+def _set_winsize(fd: int, cols: int, rows: int) -> None:
     try:
         import fcntl
         import struct
@@ -91,21 +121,84 @@ def handle_shell(req: dict) -> Iterator[bytes]:
         fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
     except OSError:
         pass
-    try:
-        while True:
-            r, _, _ = select.select([fd], [], [], 1.0)
-            if fd in r:
+
+
+async def shell_session(websocket) -> None:
+    """Run an interactive PTY shell, shuttling bytes between websocket <-> pty.
+
+    The first frame is expected (but not required) to be a JSON resize.
+    Subsequent text frames are parsed as control messages; binary frames go
+    straight to the PTY as stdin. PTY stdout becomes binary websocket frames.
+    """
+    pid, fd = pty.fork()
+    if pid == 0:  # child
+        os.execvp("/bin/sh", ["/bin/sh", "-i"])
+        return
+
+    loop = asyncio.get_running_loop()
+    stop = asyncio.Event()
+
+    async def pump_pty_to_ws() -> None:
+        try:
+            while not stop.is_set():
                 try:
-                    chunk = os.read(fd, 4096)
+                    chunk = await loop.run_in_executor(None, lambda: os.read(fd, SHELL_READ_CHUNK))
                 except OSError:
                     break
                 if not chunk:
                     break
-                yield chunk
+                try:
+                    await websocket.send_bytes(chunk)
+                except Exception:
+                    break
+        finally:
+            stop.set()
+
+    async def pump_ws_to_pty() -> None:
+        try:
+            while not stop.is_set():
+                try:
+                    msg = await websocket.receive()
+                except Exception:
+                    break
+                t = msg.get("type")
+                if t == "websocket.disconnect":
+                    break
+                if t != "websocket.receive":
+                    continue
+                if msg.get("bytes") is not None:
+                    try:
+                        os.write(fd, msg["bytes"])
+                    except OSError:
+                        break
+                elif msg.get("text") is not None:
+                    parsed = parse_resize(msg["text"])
+                    if parsed is not None:
+                        _set_winsize(fd, *parsed)
+                    else:
+                        try:
+                            os.write(fd, msg["text"].encode("utf-8"))
+                        except OSError:
+                            break
+        finally:
+            stop.set()
+
+    await websocket.accept()
+    try:
+        await asyncio.gather(pump_pty_to_ws(), pump_ws_to_pty())
     finally:
         try:
             os.close(fd)
         except OSError:
+            pass
+        try:
+            os.kill(pid, signal.SIGHUP)
+        except (OSError, ProcessLookupError):
+            pass
+        try:
+            # Reap so we don't accumulate zombies.
+            os.waitpid(pid, os.WNOHANG)
+        except (ChildProcessError, OSError):
             pass
 
 
@@ -131,8 +224,6 @@ def dispatch(req: dict) -> Any:
         return handle_put(req)
     if op == "get":
         return handle_get(req)
-    if op == "shell":
-        return handle_shell(req)
     if op == "snapshot":
         return handle_snapshot(req)
     if op == "resume":
@@ -148,6 +239,10 @@ if BedrockAgentCoreApp is not None:  # pragma: no cover - runtime entrypoint
     @app.entrypoint
     def handler(req):
         return dispatch(req)
+
+    @app.websocket
+    async def shell_ws(websocket, context):  # context is the AgentCore RequestContext
+        await shell_session(websocket)
 
     if __name__ == "__main__":
         app.run()

@@ -47,17 +47,6 @@ func TestPutGetRoundtrip(t *testing.T) {
 	assert.Equal(t, "/tmp/y", got.Path)
 }
 
-func TestShellRequest(t *testing.T) {
-	b, err := ShellRequest(120, 40)
-	require.NoError(t, err)
-	var got Request
-	require.NoError(t, json.Unmarshal(b, &got))
-	assert.Equal(t, OpShell, got.Op)
-	assert.True(t, got.TTY)
-	assert.Equal(t, uint16(120), got.Cols)
-	assert.Equal(t, uint16(40), got.Rows)
-}
-
 func TestSnapshotResumeRequests(t *testing.T) {
 	b, err := SnapshotRequest("demo")
 	require.NoError(t, err)

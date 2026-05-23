@@ -185,7 +185,14 @@ EOF
 fi
 
 step "Create the AgentCore runtime"
-prompt RUNTIME_NAME "Runtime name" "microvm-shell"
+info "Name must match [a-zA-Z][a-zA-Z0-9_]{0,47} — letters, digits, underscores; no dashes."
+while :; do
+  prompt RUNTIME_NAME "Runtime name" "microvm_shell"
+  if [[ "${RUNTIME_NAME}" =~ ^[a-zA-Z][a-zA-Z0-9_]{0,47}$ ]]; then
+    break
+  fi
+  warn "Invalid: must start with a letter, only [A-Za-z0-9_], max 48 chars (no dashes)."
+done
 
 if aws bedrock-agentcore-control get-agent-runtime \
     --agent-runtime-name "${RUNTIME_NAME}" \

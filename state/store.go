@@ -18,20 +18,22 @@ import (
 const (
 	bucketSandboxes = "sandboxes"
 	bucketSnapshots = "snapshots"
+	bucketRuntimes  = "runtimes"
 )
 
 var ErrNotFound = errors.New("not found")
 
 type Sandbox struct {
-	ID        string    `json:"id"`
-	Provider  string    `json:"provider"`
-	SessionID string    `json:"session_id"`
-	Image     string    `json:"image,omitempty"`
-	Name      string    `json:"name,omitempty"`
-	CPUs      float64   `json:"cpus,omitempty"`
-	MemoryMB  int       `json:"memory_mb,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	LastUsed  time.Time `json:"last_used"`
+	ID        string            `json:"id"`
+	Provider  string            `json:"provider"`
+	SessionID string            `json:"session_id"`
+	Image     string            `json:"image,omitempty"`
+	Name      string            `json:"name,omitempty"`
+	CPUs      float64           `json:"cpus,omitempty"`
+	MemoryMB  int               `json:"memory_mb,omitempty"`
+	Mode      string            `json:"mode,omitempty"` // snapshot mode of the owning runtime
+	CreatedAt time.Time         `json:"created_at"`
+	LastUsed  time.Time         `json:"last_used"`
 	Labels    map[string]string `json:"labels,omitempty"`
 }
 
@@ -40,9 +42,23 @@ type Snapshot struct {
 	SandboxID       string    `json:"sandbox_id"`
 	Provider        string    `json:"provider"`
 	TargetSessionID string    `json:"target_session_id"`
-	Kind            string    `json:"kind"` // "alias" on AWS
+	Kind            string    `json:"kind"`              // legacy; "alias" on pre-mode records
+	Mode            string    `json:"mode,omitempty"`    // "" (legacy) | "none" | "s3" | "efs" | "tiered"
+	Locator         string    `json:"locator,omitempty"` // mode-decoded JSON; opaque to shared code
 	Name            string    `json:"name,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
+}
+
+// Runtime records a registered AgentCore runtime and the snapshot mode it was
+// registered with, so per-sandbox commands can look up the mode without
+// round-tripping AWS or re-reading config.
+type Runtime struct {
+	Arn            string    `json:"arn"`
+	Region         string    `json:"region,omitempty"`
+	SnapshotMode   string    `json:"snapshot_mode,omitempty"`
+	SnapshotBucket string    `json:"snapshot_bucket,omitempty"`
+	ImageDigest    string    `json:"image_digest,omitempty"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 type Store struct {
@@ -63,7 +79,7 @@ func Open() (*Store, error) {
 		return nil, fmt.Errorf("open state db %s: %w", path, err)
 	}
 	if err := db.Update(func(tx *bolt.Tx) error {
-		for _, b := range []string{bucketSandboxes, bucketSnapshots} {
+		for _, b := range []string{bucketSandboxes, bucketSnapshots, bucketRuntimes} {
 			if _, err := tx.CreateBucketIfNotExists([]byte(b)); err != nil {
 				return err
 			}
@@ -155,6 +171,28 @@ func (s *Store) ListSnapshots() ([]Snapshot, error) {
 			out = append(out, sn)
 			return nil
 		})
+	})
+	return out, err
+}
+
+func (s *Store) PutRuntime(rt Runtime) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		raw, err := json.Marshal(rt)
+		if err != nil {
+			return err
+		}
+		return tx.Bucket([]byte(bucketRuntimes)).Put([]byte(rt.Arn), raw)
+	})
+}
+
+func (s *Store) GetRuntime(arn string) (Runtime, error) {
+	var out Runtime
+	err := s.db.View(func(tx *bolt.Tx) error {
+		v := tx.Bucket([]byte(bucketRuntimes)).Get([]byte(arn))
+		if v == nil {
+			return ErrNotFound
+		}
+		return json.Unmarshal(v, &out)
 	})
 	return out, err
 }

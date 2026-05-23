@@ -180,6 +180,41 @@ EOF
     aws iam attach-role-policy \
       --role-name "${ROLE_NAME}" \
       --policy-arn "arn:aws:iam::aws:policy/CloudWatchLogsFullAccess"
+  IAM_NEEDS_PROPAGATION=1
+fi
+
+# AgentCore needs to pull the image from ECR when starting the microVM.
+# put-role-policy is idempotent, so this runs whether the role is new or pre-existing.
+info "Granting the role permission to pull the shellagent image from ECR."
+ECR_POLICY_DOC="$(mktemp)"
+cat >"${ECR_POLICY_DOC}" <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "ecr:GetAuthorizationToken",
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchGetImage",
+        "ecr:GetDownloadUrlForLayer"
+      ],
+      "Resource": "arn:aws:ecr:${REGION}:${ACCOUNT_ID}:repository/${REPO_NAME}"
+    }
+  ]
+}
+EOF
+confirm_run "Attaches an inline 'ecr-pull' policy granting ecr:GetAuthorizationToken, ecr:BatchGetImage, and ecr:GetDownloadUrlForLayer (the perms AgentCore validates against)." \
+  aws iam put-role-policy \
+    --role-name "${ROLE_NAME}" \
+    --policy-name "ecr-pull" \
+    --policy-document "file://${ECR_POLICY_DOC}"
+rm -f "${ECR_POLICY_DOC}"
+
+if [[ -n "${IAM_NEEDS_PROPAGATION:-}" ]]; then
   info "Sleeping 10s for IAM propagation."
   sleep 10
 fi

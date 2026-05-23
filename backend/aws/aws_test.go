@@ -11,6 +11,7 @@ import (
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockagentcore"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockagentcore/types"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockagentcorecontrol"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/stretchr/testify/assert"
@@ -152,6 +153,34 @@ func TestResumeFromAliasReusesSession(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "sess-1", sb.SessionID)
 	assert.Equal(t, "resumed", sb.Name)
+}
+
+func TestTerminateSendsEnvelope(t *testing.T) {
+	var captured awsbackend.Request
+	fi := &fakeInvoker{respond: func(req []byte) []byte {
+		_ = json.Unmarshal(req, &captured)
+		b, _ := json.Marshal(awsbackend.TerminateResponse{OK: true})
+		return b
+	}}
+	b, _ := newTestBackend(t, fi)
+
+	err := b.Terminate(context.Background(), backend.Sandbox{ID: "mvm_x", SessionID: "sess-9"})
+	require.NoError(t, err)
+	assert.Equal(t, awsbackend.OpTerminate, captured.Op)
+	require.NotNil(t, fi.gotInput)
+	assert.Equal(t, "sess-9", awssdk.ToString(fi.gotInput.RuntimeSessionId))
+}
+
+type notFoundInvoker struct{}
+
+func (notFoundInvoker) InvokeAgentRuntime(_ context.Context, _ *bedrockagentcore.InvokeAgentRuntimeInput, _ ...func(*bedrockagentcore.Options)) (*bedrockagentcore.InvokeAgentRuntimeOutput, error) {
+	return nil, &types.ResourceNotFoundException{Message: awssdk.String("session gone")}
+}
+
+func TestTerminateIdempotentOnInvokeError(t *testing.T) {
+	b, _ := newTestBackend(t, notFoundInvoker{})
+	err := b.Terminate(context.Background(), backend.Sandbox{ID: "mvm_x", SessionID: "sess-gone"})
+	require.NoError(t, err)
 }
 
 func TestLoginRequiresRuntimeArn(t *testing.T) {

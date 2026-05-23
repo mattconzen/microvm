@@ -12,6 +12,7 @@ import (
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockagentcore"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockagentcore/types"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockagentcorecontrol"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
@@ -303,10 +304,27 @@ func (b *Backend) Resume(ctx context.Context, snap backend.Snapshot, spec backen
 func (b *Backend) Terminate(ctx context.Context, sb backend.Sandbox) (err error) {
 	t := obs.Time(ctx, obs.MetricTerminate, "provider:aws")
 	defer t.Done(&err)
-	// AgentCore sessions auto-expire on idle; there's no explicit terminate API
-	// in the public surface today, so this is a no-op at the AWS layer.
-	// State-store deletion is handled by the CLI layer.
-	obs.L(ctx).Info("aws.terminate", "session_id", sb.SessionID, "note", "session will be reclaimed by AgentCore on idle")
+
+	req, err := TerminateRequest()
+	if err != nil {
+		return err
+	}
+	body, err := b.invoke(ctx, sb, req)
+	if err != nil {
+		var notFound *types.ResourceNotFoundException
+		if errors.As(err, &notFound) {
+			err = nil
+			return nil
+		}
+		return err
+	}
+	var resp TerminateResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return fmt.Errorf("decode terminate response: %w (body: %q)", err, truncate(string(body), 512))
+	}
+	if resp.Error != "" {
+		return errors.New(resp.Error)
+	}
 	return nil
 }
 

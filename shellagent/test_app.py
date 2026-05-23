@@ -54,3 +54,13 @@ def test_get_missing_file():
 def test_dispatch_unknown_op():
     out = app.dispatch({"op": "nope"})
     assert "unknown op" in out["error"]
+
+
+def test_terminate_returns_ok():
+    out = app.handle_terminate({})
+    assert out["ok"] is True
+
+
+def test_dispatch_terminate():
+    out = app.dispatch({"op": "terminate"})
+    assert out["ok"] is True

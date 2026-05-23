@@ -1,10 +1,11 @@
 """Shell agent for microvm — interprets JSON envelopes inside the AgentCore microVM.
 
 Envelope:
-    {"op": "exec",  "cmd": ["sh", "-lc", "..."]}
-    {"op": "put",   "path": "/tmp/x", "b64": "..."}
-    {"op": "get",   "path": "/tmp/x"}
-    {"op": "shell", "tty": true, "cols": 80, "rows": 24}
+    {"op": "exec",      "cmd": ["sh", "-lc", "..."]}
+    {"op": "put",       "path": "/tmp/x", "b64": "..."}
+    {"op": "get",       "path": "/tmp/x"}
+    {"op": "shell",     "tty": true, "cols": 80, "rows": 24}
+    {"op": "terminate"}
 
 Responses are JSON dicts; "shell" yields raw PTY bytes as a stream.
 """
@@ -106,6 +107,10 @@ def handle_shell(req: dict) -> Iterator[bytes]:
             pass
 
 
+def handle_terminate(req: dict) -> dict:
+    return {"ok": True}
+
+
 def dispatch(req: dict) -> Any:
     op = req.get("op")
     if op == "exec":
@@ -116,6 +121,8 @@ def dispatch(req: dict) -> Any:
         return handle_get(req)
     if op == "shell":
         return handle_shell(req)
+    if op == "terminate":
+        return handle_terminate(req)
     return {"error": f"unknown op: {op!r}"}
 
 

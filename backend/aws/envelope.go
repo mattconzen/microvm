@@ -8,10 +8,11 @@ import (
 type Op string
 
 const (
-	OpExec  Op = "exec"
-	OpPut   Op = "put"
-	OpGet   Op = "get"
-	OpShell Op = "shell"
+	OpExec      Op = "exec"
+	OpPut       Op = "put"
+	OpGet       Op = "get"
+	OpShell     Op = "shell"
+	OpTerminate Op = "terminate"
 )
 
 type Request struct {
@@ -43,6 +44,11 @@ type GetResponse struct {
 	Error string `json:"error,omitempty"`
 }
 
+type TerminateResponse struct {
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+}
+
 func ExecRequest(cmd []string) ([]byte, error) {
 	return json.Marshal(Request{Op: OpExec, Cmd: cmd})
 }
@@ -61,6 +67,10 @@ func GetRequest(path string) ([]byte, error) {
 
 func ShellRequest(cols, rows uint16) ([]byte, error) {
 	return json.Marshal(Request{Op: OpShell, TTY: true, Cols: cols, Rows: rows})
+}
+
+func TerminateRequest() ([]byte, error) {
+	return json.Marshal(Request{Op: OpTerminate})
 }
 
 func DecodeB64(s string) ([]byte, error) {

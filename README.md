@@ -91,7 +91,7 @@ aws ecr get-login-password --region $REGION | \
 if [ "$TOOL" = "podman" ]; then
   podman build --platform linux/arm64 \
     -t $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$REPO:latest ./shellagent
-  podman push $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$REPO:latest
+  podman push --format=v2s2 $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$REPO:latest
 else
   docker buildx build --platform linux/arm64 --provenance=false \
     -t $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$REPO:latest \

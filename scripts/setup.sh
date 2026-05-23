@@ -129,8 +129,8 @@ if [[ "${BUILD_TOOL}" == "podman" ]]; then
       --platform linux/arm64 \
       -t "${ECR_URI}:${IMAGE_TAG}" \
       "${MICROVM_DIR}/shellagent"
-  confirm_run "Pushes the ARM64 image to ECR." \
-    podman push "${ECR_URI}:${IMAGE_TAG}"
+  confirm_run "Pushes the ARM64 image to ECR using the Docker v2s2 manifest format (ECR's preferred schema)." \
+    podman push --format=v2s2 "${ECR_URI}:${IMAGE_TAG}"
 else
   confirm_run "Builds the shellagent image for linux/arm64 with docker buildx and pushes to ECR. Takes a minute or two on first run." \
     docker buildx build \

@@ -135,24 +135,90 @@ func TestCopyFromWritesLocal(t *testing.T) {
 }
 
 func TestSnapshotIsAlias(t *testing.T) {
-	b, _ := newTestBackend(t, &fakeInvoker{respond: func(_ []byte) []byte { return nil }})
+	var captured awsbackend.Request
+	fi := &fakeInvoker{respond: func(req []byte) []byte {
+		_ = json.Unmarshal(req, &captured)
+		b, _ := json.Marshal(awsbackend.SnapshotResponse{Alias: "sess-1", Name: "demo"})
+		return b
+	}}
+	b, _ := newTestBackend(t, fi)
 	snap, err := b.Snapshot(context.Background(), backend.Sandbox{ID: "mvm_abc", SessionID: "sess-1"}, "demo")
 	require.NoError(t, err)
+	assert.Equal(t, awsbackend.OpSnapshot, captured.Op)
+	assert.Equal(t, "demo", captured.Name)
 	assert.Equal(t, "alias", snap.Kind)
 	assert.Equal(t, "sess-1", snap.TargetSessionID)
 	assert.Equal(t, "mvm_abc", snap.SandboxID)
 	assert.Equal(t, "demo", snap.Name)
+	require.NotNil(t, fi.gotInput)
+	assert.Equal(t, "sess-1", awssdk.ToString(fi.gotInput.RuntimeSessionId))
+}
+
+func TestSnapshotFallsBackToSessionIDWhenAliasEmpty(t *testing.T) {
+	fi := &fakeInvoker{respond: func(_ []byte) []byte {
+		b, _ := json.Marshal(awsbackend.SnapshotResponse{})
+		return b
+	}}
+	b, _ := newTestBackend(t, fi)
+	snap, err := b.Snapshot(context.Background(), backend.Sandbox{ID: "mvm_abc", SessionID: "sess-fallback"}, "x")
+	require.NoError(t, err)
+	assert.Equal(t, "sess-fallback", snap.TargetSessionID)
+}
+
+func TestSnapshotReturnsAgentError(t *testing.T) {
+	fi := &fakeInvoker{respond: func(_ []byte) []byte {
+		b, _ := json.Marshal(awsbackend.SnapshotResponse{Error: "no can do"})
+		return b
+	}}
+	b, _ := newTestBackend(t, fi)
+	_, err := b.Snapshot(context.Background(), backend.Sandbox{ID: "mvm_abc", SessionID: "s"}, "x")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no can do")
 }
 
 func TestResumeFromAliasReusesSession(t *testing.T) {
-	b, _ := newTestBackend(t, &fakeInvoker{respond: func(_ []byte) []byte { return nil }})
+	var captured awsbackend.Request
+	fi := &fakeInvoker{respond: func(req []byte) []byte {
+		_ = json.Unmarshal(req, &captured)
+		b, _ := json.Marshal(awsbackend.ResumeResponse{Alias: "sess-1"})
+		return b
+	}}
+	b, _ := newTestBackend(t, fi)
 	sb, err := b.Resume(context.Background(),
 		backend.Snapshot{Kind: "alias", TargetSessionID: "sess-1", Provider: "aws"},
 		backend.SandboxSpec{Name: "resumed"},
 	)
 	require.NoError(t, err)
+	assert.Equal(t, awsbackend.OpResume, captured.Op)
+	assert.Equal(t, "sess-1", captured.Alias)
 	assert.Equal(t, "sess-1", sb.SessionID)
 	assert.Equal(t, "resumed", sb.Name)
+	require.NotNil(t, fi.gotInput)
+	assert.Equal(t, "sess-1", awssdk.ToString(fi.gotInput.RuntimeSessionId))
+}
+
+func TestResumeRebindsToNewAlias(t *testing.T) {
+	fi := &fakeInvoker{respond: func(_ []byte) []byte {
+		b, _ := json.Marshal(awsbackend.ResumeResponse{Alias: "sess-2"})
+		return b
+	}}
+	b, _ := newTestBackend(t, fi)
+	sb, err := b.Resume(context.Background(),
+		backend.Snapshot{Kind: "alias", TargetSessionID: "sess-1", Provider: "aws"},
+		backend.SandboxSpec{Name: "resumed"},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "sess-2", sb.SessionID)
+}
+
+func TestResumeRejectsUnsupportedKind(t *testing.T) {
+	b, _ := newTestBackend(t, &fakeInvoker{respond: func(_ []byte) []byte { return nil }})
+	_, err := b.Resume(context.Background(),
+		backend.Snapshot{Kind: "checkpoint", TargetSessionID: "sess-1", Provider: "aws"},
+		backend.SandboxSpec{},
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported snapshot kind")
 }
 
 func TestTerminateSendsEnvelope(t *testing.T) {

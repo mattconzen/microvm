@@ -277,10 +277,29 @@ func (b *Backend) Snapshot(ctx context.Context, sb backend.Sandbox, name string)
 		"note", "AWS snapshots are session aliases, not durable filesystem checkpoints. State persists only as long as the sticky session does.",
 		"session_id", sb.SessionID,
 	)
+	req, err := SnapshotRequest(name)
+	if err != nil {
+		return snap, err
+	}
+	body, err := b.invoke(ctx, sb, req)
+	if err != nil {
+		return snap, err
+	}
+	var resp SnapshotResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return snap, fmt.Errorf("decode snapshot response: %w (body: %q)", err, truncate(string(body), 512))
+	}
+	if resp.Error != "" {
+		return snap, errors.New(resp.Error)
+	}
+	alias := resp.Alias
+	if alias == "" {
+		alias = sb.SessionID
+	}
 	return backend.Snapshot{
 		SandboxID:       sb.ID,
 		Provider:        "aws",
-		TargetSessionID: sb.SessionID,
+		TargetSessionID: alias,
 		Kind:            "alias",
 		Name:            name,
 		CreatedAt:       b.now(),
@@ -293,9 +312,28 @@ func (b *Backend) Resume(ctx context.Context, snap backend.Snapshot, spec backen
 	if snap.Kind != "alias" {
 		return sb, fmt.Errorf("unsupported snapshot kind %q for aws backend", snap.Kind)
 	}
+	req, err := ResumeRequest(snap.TargetSessionID)
+	if err != nil {
+		return sb, err
+	}
+	body, err := b.invoke(ctx, backend.Sandbox{SessionID: snap.TargetSessionID}, req)
+	if err != nil {
+		return sb, err
+	}
+	var resp ResumeResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return sb, fmt.Errorf("decode resume response: %w (body: %q)", err, truncate(string(body), 512))
+	}
+	if resp.Error != "" {
+		return sb, errors.New(resp.Error)
+	}
+	sessionID := resp.Alias
+	if sessionID == "" {
+		sessionID = snap.TargetSessionID
+	}
 	return backend.Sandbox{
 		Provider:  "aws",
-		SessionID: snap.TargetSessionID,
+		SessionID: sessionID,
 		Name:      spec.Name,
 		CreatedAt: b.now(),
 	}, nil

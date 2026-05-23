@@ -56,6 +56,38 @@ def test_dispatch_unknown_op():
     assert "unknown op" in out["error"]
 
 
+def test_snapshot_returns_alias(monkeypatch):
+    monkeypatch.setenv("BEDROCK_AGENTCORE_SESSION_ID", "sess-xyz")
+    out = app.handle_snapshot({"name": "demo"})
+    assert out["alias"] == "sess-xyz"
+    assert out["name"] == "demo"
+
+
+def test_snapshot_alias_empty_without_session_env(monkeypatch):
+    monkeypatch.delenv("BEDROCK_AGENTCORE_SESSION_ID", raising=False)
+    out = app.handle_snapshot({"name": "demo"})
+    assert out["alias"] == ""
+
+
+def test_resume_acks():
+    out = app.handle_resume({"alias": "sess-1"})
+    assert out["alias"] == "sess-1"
+
+
+def test_resume_falls_back_to_env(monkeypatch):
+    monkeypatch.setenv("BEDROCK_AGENTCORE_SESSION_ID", "sess-env")
+    out = app.handle_resume({})
+    assert out["alias"] == "sess-env"
+
+
+def test_dispatch_routes_snapshot_resume(monkeypatch):
+    monkeypatch.setenv("BEDROCK_AGENTCORE_SESSION_ID", "sess-d")
+    snap = app.dispatch({"op": "snapshot", "name": "n"})
+    assert snap == {"alias": "sess-d", "name": "n"}
+    res = app.dispatch({"op": "resume", "alias": "sess-abc"})
+    assert res == {"alias": "sess-abc"}
+
+
 def test_terminate_returns_ok():
     out = app.handle_terminate({})
     assert out["ok"] is True

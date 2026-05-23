@@ -5,6 +5,8 @@ Envelope:
     {"op": "put",       "path": "/tmp/x", "b64": "..."}
     {"op": "get",       "path": "/tmp/x"}
     {"op": "shell",     "tty": true, "cols": 80, "rows": 24}
+    {"op": "snapshot",  "name": "demo"}
+    {"op": "resume",    "alias": "sess-1"}
     {"op": "terminate"}
 
 Responses are JSON dicts; "shell" yields raw PTY bytes as a stream.
@@ -107,6 +109,16 @@ def handle_shell(req: dict) -> Iterator[bytes]:
             pass
 
 
+def handle_snapshot(req: dict) -> dict:
+    alias = os.environ.get("BEDROCK_AGENTCORE_SESSION_ID", "")
+    return {"alias": alias, "name": req.get("name", "")}
+
+
+def handle_resume(req: dict) -> dict:
+    alias = req.get("alias", "") or os.environ.get("BEDROCK_AGENTCORE_SESSION_ID", "")
+    return {"alias": alias}
+
+
 def handle_terminate(req: dict) -> dict:
     return {"ok": True}
 
@@ -121,6 +133,10 @@ def dispatch(req: dict) -> Any:
         return handle_get(req)
     if op == "shell":
         return handle_shell(req)
+    if op == "snapshot":
+        return handle_snapshot(req)
+    if op == "resume":
+        return handle_resume(req)
     if op == "terminate":
         return handle_terminate(req)
     return {"error": f"unknown op: {op!r}"}

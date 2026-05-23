@@ -57,3 +57,18 @@ func TestShellRequest(t *testing.T) {
 	assert.Equal(t, uint16(120), got.Cols)
 	assert.Equal(t, uint16(40), got.Rows)
 }
+
+func TestSnapshotResumeRequests(t *testing.T) {
+	b, err := SnapshotRequest("demo")
+	require.NoError(t, err)
+	var got Request
+	require.NoError(t, json.Unmarshal(b, &got))
+	assert.Equal(t, OpSnapshot, got.Op)
+	assert.Equal(t, "demo", got.Name)
+
+	b, err = ResumeRequest("sess-1")
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(b, &got))
+	assert.Equal(t, OpResume, got.Op)
+	assert.Equal(t, "sess-1", got.Alias)
+}

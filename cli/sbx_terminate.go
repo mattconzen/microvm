@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/mattconzen/monorepo/apps/microvm/backend"
+	"github.com/mattconzen/microvm/backend"
 )
 
 func newTerminateCmd(ctx context.Context, app *App, g *GlobalFlags) *cobra.Command {

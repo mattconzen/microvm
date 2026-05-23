@@ -214,10 +214,8 @@ confirm_run "Attaches an inline 'ecr-pull' policy granting ecr:GetAuthorizationT
     --policy-document "file://${ECR_POLICY_DOC}"
 rm -f "${ECR_POLICY_DOC}"
 
-if [[ -n "${IAM_NEEDS_PROPAGATION:-}" ]]; then
-  info "Sleeping 10s for IAM propagation."
-  sleep 10
-fi
+info "Sleeping 10s for IAM propagation (AgentCore validates ECR perms synchronously during create-agent-runtime)."
+sleep 10
 
 step "Create the AgentCore runtime"
 info "Name must match [a-zA-Z][a-zA-Z0-9_]{0,47} — letters, digits, underscores; no dashes."
@@ -229,14 +227,13 @@ while :; do
   warn "Invalid: must start with a letter, only [A-Za-z0-9_], max 48 chars (no dashes)."
 done
 
-if aws bedrock-agentcore-control get-agent-runtime \
-    --agent-runtime-name "${RUNTIME_NAME}" \
-    --region "${REGION}" >/dev/null 2>&1; then
-  ok "Runtime ${RUNTIME_NAME} already exists, fetching its ARN."
-  RUNTIME_ARN="$(aws bedrock-agentcore-control get-agent-runtime \
-    --agent-runtime-name "${RUNTIME_NAME}" \
-    --region "${REGION}" \
-    --query 'agentRuntimeArn' --output text)"
+EXISTING_ARN="$(aws bedrock-agentcore-control list-agent-runtimes \
+  --region "${REGION}" \
+  --query "agentRuntimes[?agentRuntimeName=='${RUNTIME_NAME}'].agentRuntimeArn | [0]" \
+  --output text)"
+if [[ -n "${EXISTING_ARN}" && "${EXISTING_ARN}" != "None" ]]; then
+  ok "Runtime ${RUNTIME_NAME} already exists, reusing its ARN."
+  RUNTIME_ARN="${EXISTING_ARN}"
 else
   ARTIFACT_JSON=$(jq -n --arg uri "${ECR_URI}@${IMAGE_DIGEST}" \
     '{containerConfiguration: {containerUri: $uri}}')
@@ -248,10 +245,10 @@ else
       --network-configuration "${NETWORK_JSON}" \
       --role-arn "${ROLE_ARN}" \
       --region "${REGION}"
-  RUNTIME_ARN="$(aws bedrock-agentcore-control get-agent-runtime \
-    --agent-runtime-name "${RUNTIME_NAME}" \
+  RUNTIME_ARN="$(aws bedrock-agentcore-control list-agent-runtimes \
     --region "${REGION}" \
-    --query 'agentRuntimeArn' --output text)"
+    --query "agentRuntimes[?agentRuntimeName=='${RUNTIME_NAME}'].agentRuntimeArn | [0]" \
+    --output text)"
 fi
 ok "Runtime ARN: ${RUNTIME_ARN}"
 

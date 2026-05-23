@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mattconzen/monorepo/apps/microvm/config"
+	"github.com/mattconzen/microvm/config"
 )
 
 func TestLoadMissingReturnsDefault(t *testing.T) {

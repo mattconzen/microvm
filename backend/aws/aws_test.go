@@ -17,9 +17,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mattconzen/monorepo/apps/microvm/backend"
-	awsbackend "github.com/mattconzen/monorepo/apps/microvm/backend/aws"
-	"github.com/mattconzen/monorepo/apps/microvm/config"
+	"github.com/mattconzen/microvm/backend"
+	awsbackend "github.com/mattconzen/microvm/backend/aws"
+	"github.com/mattconzen/microvm/config"
 )
 
 type fakeInvoker struct {

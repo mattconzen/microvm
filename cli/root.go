@@ -5,10 +5,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/mattconzen/monorepo/apps/microvm/backend"
-	"github.com/mattconzen/monorepo/apps/microvm/config"
-	"github.com/mattconzen/monorepo/apps/microvm/obs"
-	"github.com/mattconzen/monorepo/apps/microvm/state"
+	"github.com/mattconzen/microvm/backend"
+	"github.com/mattconzen/microvm/config"
+	"github.com/mattconzen/microvm/obs"
+	"github.com/mattconzen/microvm/state"
 )
 
 type App struct {

@@ -20,6 +20,7 @@ func newSbxCmd(ctx context.Context, app *App, g *GlobalFlags) *cobra.Command {
 		newCpCmd(ctx, app, g),
 		newShellCmd(ctx, app, g),
 		newSnapshotCmd(ctx, app, g),
+		newSnapshotsCmd(ctx, app, g),
 		newResumeCmd(ctx, app, g),
 		newTerminateCmd(ctx, app, g),
 	)

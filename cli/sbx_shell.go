@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/mattconzen/monorepo/apps/microvm/backend"
+	"github.com/mattconzen/microvm/backend"
 )
 
 func newShellCmd(ctx context.Context, app *App, g *GlobalFlags) *cobra.Command {

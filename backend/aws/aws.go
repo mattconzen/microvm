@@ -16,9 +16,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockagentcorecontrol"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
-	"github.com/mattconzen/monorepo/apps/microvm/backend"
-	"github.com/mattconzen/monorepo/apps/microvm/config"
-	"github.com/mattconzen/monorepo/apps/microvm/obs"
+	"github.com/mattconzen/microvm/backend"
+	"github.com/mattconzen/microvm/config"
+	"github.com/mattconzen/microvm/obs"
 )
 
 // Invoker abstracts the AgentCore data-plane client so tests can fake it.
@@ -104,16 +104,6 @@ func (b *Backend) Login(ctx context.Context, opts backend.LoginOpts) (err error)
 			"    2) push it to ECR repo `microvm-shellagent`\n" +
 			"    3) aws bedrock-agentcore-control create-agent-runtime --agent-runtime-name microvm-shell --agent-runtime-artifact ... --network-configuration NetworkMode=PUBLIC --role-arn <role>\n" +
 			"    4) microvm login --runtime-arn <returned-arn>")
-	}
-
-	// 3. Verify the runtime exists.
-	apiT2 := obs.Time(ctx, obs.MetricAPICall, "provider:aws", "op:GetAgentRuntime")
-	_, err = b.control.GetAgentRuntime(ctx, &bedrockagentcorecontrol.GetAgentRuntimeInput{
-		AgentRuntimeId: awssdk.String(arn),
-	})
-	apiT2.Done(&err)
-	if err != nil {
-		return fmt.Errorf("verify runtime %s: %w", arn, err)
 	}
 
 	b.cfg.AWS.AgentRuntimeArn = arn

@@ -12,7 +12,7 @@ import (
 
 	bolt "go.etcd.io/bbolt"
 
-	"github.com/mattconzen/monorepo/apps/microvm/config"
+	"github.com/mattconzen/microvm/config"
 )
 
 const (
@@ -140,6 +140,21 @@ func (s *Store) GetSnapshot(id string) (Snapshot, error) {
 			return ErrNotFound
 		}
 		return json.Unmarshal(v, &out)
+	})
+	return out, err
+}
+
+func (s *Store) ListSnapshots() ([]Snapshot, error) {
+	var out []Snapshot
+	err := s.db.View(func(tx *bolt.Tx) error {
+		return tx.Bucket([]byte(bucketSnapshots)).ForEach(func(_, v []byte) error {
+			var sn Snapshot
+			if err := json.Unmarshal(v, &sn); err != nil {
+				return err
+			}
+			out = append(out, sn)
+			return nil
+		})
 	})
 	return out, err
 }

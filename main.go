@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/mattconzen/monorepo/apps/microvm/backend"
-	awsbackend "github.com/mattconzen/monorepo/apps/microvm/backend/aws"
-	"github.com/mattconzen/monorepo/apps/microvm/cli"
-	"github.com/mattconzen/monorepo/apps/microvm/config"
-	"github.com/mattconzen/monorepo/apps/microvm/obs"
-	"github.com/mattconzen/monorepo/apps/microvm/state"
+	"github.com/mattconzen/microvm/backend"
+	awsbackend "github.com/mattconzen/microvm/backend/aws"
+	"github.com/mattconzen/microvm/cli"
+	"github.com/mattconzen/microvm/config"
+	"github.com/mattconzen/microvm/obs"
+	"github.com/mattconzen/microvm/state"
 )
 
 var version = "0.1.0-dev"

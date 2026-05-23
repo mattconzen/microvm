@@ -6,8 +6,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/mattconzen/monorepo/apps/microvm/backend"
-	"github.com/mattconzen/monorepo/apps/microvm/state"
+	"github.com/mattconzen/microvm/backend"
+	"github.com/mattconzen/microvm/state"
 )
 
 func newResumeCmd(ctx context.Context, app *App, g *GlobalFlags) *cobra.Command {

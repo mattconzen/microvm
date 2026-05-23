@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mattconzen/monorepo/apps/microvm/state"
+	"github.com/mattconzen/microvm/state"
 )
 
 func openStore(t *testing.T) *state.Store {

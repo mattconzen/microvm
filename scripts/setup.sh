@@ -76,9 +76,25 @@ BANNER
 
 step "Checking prerequisites"
 require_cmd aws
-require_cmd docker
 require_cmd jq
-ok "aws, docker, jq present"
+
+# Pick a container build tool that supports linux/arm64 cross-builds + push.
+# Prefer podman (works out of the box on Fedora/RHEL with qemu-user-static).
+# Fall back to docker buildx (macOS Docker Desktop, Ubuntu with buildx plugin).
+if command -v podman >/dev/null 2>&1; then
+  BUILD_TOOL="podman"
+  ok "Using podman for ARM64 build/push."
+elif command -v docker >/dev/null 2>&1 && docker buildx version >/dev/null 2>&1; then
+  BUILD_TOOL="docker"
+  ok "Using docker buildx for ARM64 build/push."
+else
+  warn "Need either 'podman' or 'docker' (with the buildx plugin) for linux/arm64 cross-builds."
+  warn "On Fedora: 'sudo rpm-ostree install podman qemu-user-static && systemctl reboot' (rpm-ostree)"
+  warn "         or 'sudo dnf install podman qemu-user-static' (dnf)."
+  warn "On macOS / Ubuntu: install Docker Desktop or 'apt install docker-buildx-plugin'."
+  exit 1
+fi
+ok "aws, jq, ${BUILD_TOOL} present"
 
 step "AWS account + region"
 info "Reads your default profile via 'aws sts get-caller-identity'."
@@ -102,18 +118,28 @@ fi
 
 step "Build and push the shellagent image (ARM64)"
 info "AgentCore microVMs are ARM64. Pushing an amd64 image will fail to start."
-info "Uses 'docker buildx' with --platform linux/arm64."
-confirm_run "Logs docker in to your ECR registry." \
-  bash -c "aws ecr get-login-password --region '${REGION}' | docker login --username AWS --password-stdin '${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com'"
+info "Uses '${BUILD_TOOL}' with --platform linux/arm64."
+confirm_run "Logs ${BUILD_TOOL} in to your ECR registry." \
+  bash -c "aws ecr get-login-password --region '${REGION}' | ${BUILD_TOOL} login --username AWS --password-stdin '${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com'"
 
 IMAGE_TAG="latest"
-confirm_run "Builds the shellagent image for linux/arm64 and pushes to ECR. Takes a minute or two on first run." \
-  docker buildx build \
-    --platform linux/arm64 \
-    --provenance=false \
-    -t "${ECR_URI}:${IMAGE_TAG}" \
-    "${MICROVM_DIR}/shellagent" \
-    --push
+if [[ "${BUILD_TOOL}" == "podman" ]]; then
+  confirm_run "Builds the shellagent image for linux/arm64 with podman. Takes a minute or two on first run (qemu emulation)." \
+    podman build \
+      --platform linux/arm64 \
+      -t "${ECR_URI}:${IMAGE_TAG}" \
+      "${MICROVM_DIR}/shellagent"
+  confirm_run "Pushes the ARM64 image to ECR." \
+    podman push "${ECR_URI}:${IMAGE_TAG}"
+else
+  confirm_run "Builds the shellagent image for linux/arm64 with docker buildx and pushes to ECR. Takes a minute or two on first run." \
+    docker buildx build \
+      --platform linux/arm64 \
+      --provenance=false \
+      -t "${ECR_URI}:${IMAGE_TAG}" \
+      "${MICROVM_DIR}/shellagent" \
+      --push
+fi
 
 info "Resolving the image digest to pin the runtime against."
 IMAGE_DIGEST="$(aws ecr describe-images \

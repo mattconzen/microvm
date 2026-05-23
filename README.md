@@ -42,7 +42,7 @@ microvm terminate my-sbx
 |---|---|
 | Go 1.22+ | Build the CLI |
 | `aws` CLI v2 | Provisioning + auth |
-| `docker` (with buildx) | Build the ARM64 shellagent image |
+| `podman` *or* `docker` (with buildx) | Build the ARM64 shellagent image. On Fedora, `podman` is already installed; on macOS/Ubuntu, Docker Desktop or the `docker-buildx-plugin` package. |
 | `jq` | Used by `scripts/setup.sh` |
 | An AWS account | Bedrock AgentCore access (preview in some regions; check availability) |
 
@@ -83,11 +83,20 @@ REPO=microvm-shell
 aws ecr create-repository --repository-name $REPO --region $REGION
 
 # 2. Build + push (ARM64 is mandatory)
+# Pick whichever container tool you have. Both work; podman is the default on Fedora.
+TOOL=${TOOL:-podman}  # or 'docker'
 aws ecr get-login-password --region $REGION | \
-  docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com
-docker buildx build --platform linux/arm64 --provenance=false \
-  -t $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$REPO:latest \
-  ./shellagent --push
+  $TOOL login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com
+
+if [ "$TOOL" = "podman" ]; then
+  podman build --platform linux/arm64 \
+    -t $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$REPO:latest ./shellagent
+  podman push $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$REPO:latest
+else
+  docker buildx build --platform linux/arm64 --provenance=false \
+    -t $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$REPO:latest \
+    ./shellagent --push
+fi
 
 # 3. IAM role
 aws iam create-role --role-name microvm-shellagent-exec \

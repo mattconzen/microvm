@@ -598,7 +598,8 @@ if [[ "${S3_BUCKET_EXISTS}" -eq 1 ]]; then
   if ! has_managed_tag "${BUCKET_TAGS}"; then
     err "S3 bucket ${BUCKET_NAME} is missing the microvm=managed tag. Refusing to delete."
   else
-    # Count objects (one page is enough -- we only need empty/non-empty).
+    # We only need to know if there are any objects at all; --max-items 1
+    # keeps the response small.
     OBJ_COUNT="$(aws s3api list-object-versions \
       --bucket "${BUCKET_NAME}" \
       --region "${REGION}" \
@@ -637,17 +638,24 @@ if [[ "${S3_BUCKET_EXISTS}" -eq 1 ]]; then
         if [[ "${N}" -eq 0 ]]; then
           break
         fi
-        aws s3api delete-objects \
+        if ! aws s3api delete-objects \
           --bucket "${BUCKET_NAME}" \
           --region "${REGION}" \
-          --delete "${DELETE_PAYLOAD}" >/dev/null \
-          || { warn "delete-objects batch failed (continuing)"; break; }
+          --delete "${DELETE_PAYLOAD}" >/dev/null; then
+          warn "delete-objects batch failed"
+          PROCEED=0
+          break
+        fi
         info "  removed ${N} object version(s)/marker(s)..."
       done
-      confirm_run "Deletes the S3 bucket ${BUCKET_NAME}." \
-        aws s3api delete-bucket \
-          --bucket "${BUCKET_NAME}" \
-          --region "${REGION}" || warn "delete failed (continuing)"
+      if [[ "${PROCEED}" -eq 1 ]]; then
+        confirm_run "Deletes the S3 bucket ${BUCKET_NAME}." \
+          aws s3api delete-bucket \
+            --bucket "${BUCKET_NAME}" \
+            --region "${REGION}" || warn "delete failed (continuing)"
+      else
+        warn "bucket emptying failed; skipping delete-bucket. Run teardown again after resolving the issue."
+      fi
     fi
   fi
 else

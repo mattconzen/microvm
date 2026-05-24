@@ -23,11 +23,50 @@ func TestProvisionerFor_AliasMode(t *testing.T) {
 	assert.Equal(t, "none", p.Mode())
 }
 
-func TestProvisionerFor_EfsNotImplemented(t *testing.T) {
+func TestProvisionerFor_EfsMode(t *testing.T) {
+	p, err := awsbackend.ProvisionerFor("efs", backend.LoginOpts{
+		EFSAccessPointArn: "arn:aws:elasticfilesystem:us-east-1:123:access-point/fsap-abc123",
+		EFSMountPath:      "/mnt/efs",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "efs", p.Mode())
+}
+
+func TestEfsProvisioner_RequiresAccessPointArn(t *testing.T) {
 	_, err := awsbackend.ProvisionerFor("efs", backend.LoginOpts{})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not implemented")
-	assert.Contains(t, err.Error(), "PR2")
+	assert.Contains(t, err.Error(), "--efs-access-point-arn")
+}
+
+func TestEfsProvisioner_RejectsInvalidArn(t *testing.T) {
+	cases := []string{
+		"not-an-arn",
+		"arn:aws:s3:::bucket", // wrong service
+		"arn:aws:elasticfilesystem:us-east-1:123:file-system/fs-abc", // FS ARN, not AP ARN
+	}
+	for _, a := range cases {
+		_, err := awsbackend.ProvisionerFor("efs", backend.LoginOpts{EFSAccessPointArn: a})
+		require.Errorf(t, err, "expected %q to be rejected", a)
+	}
+}
+
+func TestEfsProvisioner_DefaultsMountPath(t *testing.T) {
+	p, err := awsbackend.ProvisionerFor("efs", backend.LoginOpts{
+		EFSAccessPointArn: "arn:aws:elasticfilesystem:us-east-1:123:access-point/fsap-abc123",
+	})
+	require.NoError(t, err)
+	env := p.EnvOverrides()
+	assert.Equal(t, "efs", env["MICROVM_SNAPSHOT_MODE"])
+	assert.Equal(t, "/mnt/efs", env["MICROVM_EFS_MOUNT_PATH"])
+}
+
+func TestEfsProvisioner_RespectsCustomMountPath(t *testing.T) {
+	p, err := awsbackend.ProvisionerFor("efs", backend.LoginOpts{
+		EFSAccessPointArn: "arn:aws:elasticfilesystem:us-east-1:123:access-point/fsap-abc123",
+		EFSMountPath:      "/data",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "/data", p.EnvOverrides()["MICROVM_EFS_MOUNT_PATH"])
 }
 
 func TestProvisionerFor_TieredNotImplemented(t *testing.T) {

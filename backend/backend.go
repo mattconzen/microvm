@@ -60,6 +60,11 @@ type LoginOpts struct {
 	// EFS-only. Required when SnapshotMode == "efs"; ignored otherwise.
 	EFSAccessPointArn string
 	EFSMountPath      string // default "/mnt/efs"
+
+	// Tiered-only. Required when SnapshotMode == "tiered". Ignored otherwise.
+	S3FilesAccessPointArn string
+	S3FilesBucket         string // S3 bucket backing the access point (used to mint locators)
+	S3FilesMountPath      string // default "/workspace"
 }
 
 type ExecIO struct {

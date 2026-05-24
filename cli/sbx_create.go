@@ -29,6 +29,9 @@ func newCreateCmd(ctx context.Context, app *App, g *GlobalFlags) *cobra.Command 
 				return err
 			}
 			if fromSnap != "" {
+				if image != "" || cpus != 0 || mem != 0 {
+					return fmt.Errorf("--from-snapshot cannot be combined with --image / --cpus / --memory (resource config comes from the resumed sandbox); omit them or use a separate sbx resume instead")
+				}
 				snap, err := app.Store.GetSnapshot(fromSnap)
 				if err != nil {
 					return fmt.Errorf("load snapshot: %w", err)

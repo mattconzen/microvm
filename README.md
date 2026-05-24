@@ -113,10 +113,10 @@ user-facing operations on top:
 | `microvm sbx create --from-snapshot <snap-id>` | create a new sandbox starting from a prior snapshot |
 | `microvm sbx checkpoint <id>` | (tiered mode) promote cache `promote/` artifacts into the snapshottable workspace |
 
-`fork` and `create --from-snapshot` are equivalent for tier-2 content;
-`fork` is the convenience when you already have a running sandbox to
-branch from, `create --from-snapshot` is the convenience when you're
-starting from a saved snapshot id.
+`fork` snapshots and resumes in one call, creating a new snapshot record
+along the way. `create --from-snapshot` reuses an existing snapshot id
+without creating a new one — use it when you already have a snapshot id
+in hand (from `sbx snapshots`) and just want a fresh sandbox seeded from it.
 
 `revert` overwrites the existing sandbox in place. Use `fork` if you
 want to keep the current state too.

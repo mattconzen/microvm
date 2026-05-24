@@ -435,6 +435,10 @@ func (b *Backend) invoke(ctx context.Context, sb backend.Sandbox, payload []byte
 	if b.cfg.AWS.AgentRuntimeArn == "" {
 		return nil, errors.New("aws backend: agent runtime ARN not configured")
 	}
+	payload, err := injectSandboxID(payload, sb.ID)
+	if err != nil {
+		return nil, fmt.Errorf("inject sandbox_id: %w", err)
+	}
 	apiT := obs.Time(ctx, obs.MetricAPICall, "provider:aws", "op:InvokeAgentRuntime")
 	out, err := b.invoker.InvokeAgentRuntime(ctx, &bedrockagentcore.InvokeAgentRuntimeInput{
 		AgentRuntimeArn:  awssdk.String(b.cfg.AWS.AgentRuntimeArn),

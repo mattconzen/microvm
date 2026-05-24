@@ -19,15 +19,16 @@ const (
 )
 
 type Request struct {
-	Op      Op       `json:"op"`
-	Cmd     []string `json:"cmd,omitempty"`
-	Path    string   `json:"path,omitempty"`
-	B64     string   `json:"b64,omitempty"`
-	Name    string   `json:"name,omitempty"`
-	Alias   string   `json:"alias,omitempty"`
-	SnapID  string   `json:"snap_id,omitempty"`
-	Mode    string   `json:"mode,omitempty"`
-	Locator string   `json:"locator,omitempty"`
+	Op        Op       `json:"op"`
+	Cmd       []string `json:"cmd,omitempty"`
+	Path      string   `json:"path,omitempty"`
+	B64       string   `json:"b64,omitempty"`
+	Name      string   `json:"name,omitempty"`
+	Alias     string   `json:"alias,omitempty"`
+	SnapID    string   `json:"snap_id,omitempty"`
+	Mode      string   `json:"mode,omitempty"`
+	Locator   string   `json:"locator,omitempty"`
+	SandboxID string   `json:"sandbox_id,omitempty"`
 }
 
 type ExecResponse struct {
@@ -107,4 +108,23 @@ func TerminateRequest() ([]byte, error) {
 
 func DecodeB64(s string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(s)
+}
+
+// injectSandboxID decodes an already-marshaled request payload, sets the
+// SandboxID field, and re-encodes it. EFS mode needs the shellagent to know
+// which subdir to operate on, but the sandbox id isn't known to the request
+// constructors — they only see the spec/cmd. Callers with no sandbox id (e.g.
+// the Resume path that re-targets a snapshot's session) pass an empty string,
+// in which case the payload is returned unchanged so the wire shape stays
+// identical to the pre-EFS world.
+func injectSandboxID(payload []byte, sandboxID string) ([]byte, error) {
+	if sandboxID == "" {
+		return payload, nil
+	}
+	var req Request
+	if err := json.Unmarshal(payload, &req); err != nil {
+		return nil, err
+	}
+	req.SandboxID = sandboxID
+	return json.Marshal(req)
 }

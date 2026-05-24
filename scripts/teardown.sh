@@ -1,28 +1,41 @@
 #!/usr/bin/env bash
 #
-# Tears down everything scripts/setup.sh and scripts/setup_efs.sh provisioned.
+# Tears down everything scripts/setup.sh, scripts/setup_efs.sh, and
+# scripts/setup_tiered.sh provisioned.
 #
 # Discovery strategy:
-#   - VPC-side resources (VPC, subnets, SG, EFS filesystem, mount targets,
-#     access point) are found by the `microvm=managed` tag the setup scripts
-#     applied — we refuse to touch anything that isn't tagged that way.
+#   - VPC-side resources (VPC, subnets, SGs, EFS filesystem, mount targets,
+#     access point, S3 gateway endpoint) are found by the `microvm=managed`
+#     tag the setup scripts applied — we refuse to touch anything that isn't
+#     tagged that way.
 #   - AgentCore runtimes are looked up by name (`microvm_shell`,
-#     `microvm_shell_efs`) since AgentCore doesn't surface tags in list output.
+#     `microvm_shell_efs`, `microvm_shell_tiered`) since AgentCore doesn't
+#     surface tags in list output.
 #   - ECR repo + IAM role are looked up by name (defaults match setup.sh).
-#     For the IAM role we only delete the two inline policies setup created
-#     (`ecr-pull`, `microvm-efs`) and detach the one managed policy
-#     (`CloudWatchLogsFullAccess`). Other policies on the role are left alone.
+#     For the IAM role we only delete the three inline policies setup created
+#     (`ecr-pull`, `microvm-efs`, `microvm-tiered`) and detach the one managed
+#     policy (`CloudWatchLogsFullAccess`). Other policies are left alone.
+#   - S3 bucket is looked up by deterministic name
+#     (`microvm-workspace-<account>-<region>`) and tag-checked before any
+#     destructive action. If the bucket is non-empty, the user must type the
+#     bucket name to confirm (unless --yes was passed).
+#   - S3 Files filesystem + access point are looked up by tag.
 #
 # Order (children before parents):
-#   1. AgentCore runtimes (microvm_shell, microvm_shell_efs)
+#   1. AgentCore runtimes (microvm_shell, microvm_shell_efs, microvm_shell_tiered)
 #   2. EFS access point
 #   3. EFS mount targets (poll until describe-mount-targets is empty)
 #   4. EFS filesystem
-#   5. Security group microvm-efs-sg (depends on no ENIs attached)
-#   6. Subnets (poll for no dependent ENIs)
-#   7. VPC
-#   8. IAM role inline policies + managed attachment, then the role
-#   9. ECR images + repository
+#   5. S3 Files association
+#   6. S3 Files filesystem
+#   7. S3 access point (microvm-workspace)
+#   8. S3 bucket (empty + delete-bucket)
+#   9. VPC gateway endpoint for S3
+#  10. Security groups microvm-efs-sg, microvm-tiered-sg (depends on no ENIs attached)
+#  11. Subnets (poll for no dependent ENIs)
+#  12. VPC
+#  13. IAM role inline policies + managed attachment, then the role
+#  14. ECR images + repository
 #
 # Idempotent: a missing resource is logged and skipped. Pass --yes to skip
 # the confirmation prompt.
@@ -54,7 +67,8 @@ for arg in "$@"; do
       cat <<EOF
 Usage: $(basename "$0") [--yes]
 
-Destroys AWS resources provisioned by scripts/setup.sh and scripts/setup_efs.sh.
+Destroys AWS resources provisioned by scripts/setup.sh, scripts/setup_efs.sh,
+and scripts/setup_tiered.sh.
 
 Options:
   -y, --yes    Skip the confirmation prompt (still prints the summary).
@@ -120,9 +134,10 @@ cat <<'BANNER'
 
   microvm teardown
   ----------------
-  Destroys the AWS resources provisioned by scripts/setup.sh and
-  scripts/setup_efs.sh. Only resources tagged microvm=managed (or the
-  named runtimes / ECR repo / IAM role) are touched.
+  Destroys the AWS resources provisioned by scripts/setup.sh,
+  scripts/setup_efs.sh, and scripts/setup_tiered.sh. Only resources
+  tagged microvm=managed (or the named runtimes / ECR repo / IAM role
+  / S3 bucket) are touched.
 
   This is destructive. A summary of every targeted resource is printed
   before any delete call. Pass --yes to skip the confirmation prompt.
@@ -143,11 +158,18 @@ prompt REGION "AWS region" "${DEFAULT_REGION:-us-east-1}"
 
 TAG_FILTER="Name=tag:microvm,Values=managed"
 
-# Names default to the same values setup.sh / setup_efs.sh prompt for.
-prompt RUNTIME_NAME       "AgentCore runtime name (alias mode)" "microvm_shell"
-prompt RUNTIME_NAME_EFS   "AgentCore runtime name (EFS mode)"   "microvm_shell_efs"
-prompt REPO_NAME          "ECR repository name"                 "microvm-shell"
-prompt ROLE_NAME          "IAM execution role name"             "microvm-shellagent-exec"
+# Names default to the same values setup.sh / setup_efs.sh / setup_tiered.sh
+# prompt for.
+prompt RUNTIME_NAME        "AgentCore runtime name (alias mode)"  "microvm_shell"
+prompt RUNTIME_NAME_EFS    "AgentCore runtime name (EFS mode)"    "microvm_shell_efs"
+prompt RUNTIME_NAME_TIERED "AgentCore runtime name (tiered mode)" "microvm_shell_tiered"
+prompt REPO_NAME           "ECR repository name"                  "microvm-shell"
+prompt ROLE_NAME           "IAM execution role name"              "microvm-shellagent-exec"
+
+# Tiered-mode resource names follow the deterministic schema from
+# setup_tiered.sh.
+BUCKET_NAME="microvm-workspace-${ACCOUNT_ID}-${REGION}"
+AP_NAME="microvm-workspace"
 
 # ---------------------------------------------------------------------------
 # Discovery phase: find what actually exists. We don't delete anything yet.
@@ -179,6 +201,18 @@ if RUNTIME_ARN_EFS="$(aws bedrock-agentcore-control list-agent-runtimes \
     --output text 2>/dev/null || echo "")"
 fi
 
+RUNTIME_ARN_TIERED=""
+RUNTIME_ID_TIERED=""
+if RUNTIME_ARN_TIERED="$(aws bedrock-agentcore-control list-agent-runtimes \
+    --region "${REGION}" \
+    --query "agentRuntimes[?agentRuntimeName=='${RUNTIME_NAME_TIERED}'].agentRuntimeArn | [0]" \
+    --output text 2>/dev/null)" && [[ -n "${RUNTIME_ARN_TIERED}" && "${RUNTIME_ARN_TIERED}" != "None" ]]; then
+  RUNTIME_ID_TIERED="$(aws bedrock-agentcore-control list-agent-runtimes \
+    --region "${REGION}" \
+    --query "agentRuntimes[?agentRuntimeName=='${RUNTIME_NAME_TIERED}'].agentRuntimeId | [0]" \
+    --output text 2>/dev/null || echo "")"
+fi
+
 VPC_ID="$(aws ec2 describe-vpcs \
   --region "${REGION}" \
   --filters ${TAG_FILTER} \
@@ -196,6 +230,7 @@ if [[ -n "${VPC_ID}" ]]; then
 fi
 
 SG_ID=""
+SG_ID_TIERED=""
 if [[ -n "${VPC_ID}" ]]; then
   SG_ID="$(aws ec2 describe-security-groups \
     --region "${REGION}" \
@@ -203,6 +238,12 @@ if [[ -n "${VPC_ID}" ]]; then
     --query 'SecurityGroups[0].GroupId' \
     --output text 2>/dev/null || echo "None")"
   [[ "${SG_ID}" == "None" ]] && SG_ID=""
+  SG_ID_TIERED="$(aws ec2 describe-security-groups \
+    --region "${REGION}" \
+    --filters "Name=vpc-id,Values=${VPC_ID}" "Name=group-name,Values=microvm-tiered-sg" \
+    --query 'SecurityGroups[0].GroupId' \
+    --output text 2>/dev/null || echo "None")"
+  [[ "${SG_ID_TIERED}" == "None" ]] && SG_ID_TIERED=""
 fi
 
 FS_ID="$(aws efs describe-file-systems \
@@ -230,6 +271,44 @@ if [[ -n "${FS_ID}" ]]; then
   [[ "${AP_ID}" == "None" ]] && AP_ID=""
 fi
 
+# ---------------------------------------------------------------------------
+# S3 Files filesystem (NEW API -- shape may shift; mirror setup_tiered.sh).
+#
+# TODO at first real run: if the `aws s3files` API doesn't match, adjust
+# the command names / JMESPath here and in the delete steps below.
+# ---------------------------------------------------------------------------
+S3FILES_FS_ID="$(aws s3files list-file-systems \
+  --region "${REGION}" \
+  --query "fileSystems[?Tags && length(Tags[?Key=='microvm' && Value=='managed'])>\`0\`].fileSystemId | [0]" \
+  --output text 2>/dev/null || echo "None")"
+[[ "${S3FILES_FS_ID}" == "None" ]] && S3FILES_FS_ID=""
+
+# S3 access point: deterministic name "microvm-workspace".
+S3_AP_EXISTS=0
+if aws s3control get-access-point \
+    --account-id "${ACCOUNT_ID}" \
+    --region "${REGION}" \
+    --name "${AP_NAME}" >/dev/null 2>&1; then
+  S3_AP_EXISTS=1
+fi
+
+# S3 bucket: deterministic name microvm-workspace-<account>-<region>.
+S3_BUCKET_EXISTS=0
+if aws s3api head-bucket --bucket "${BUCKET_NAME}" --region "${REGION}" >/dev/null 2>&1; then
+  S3_BUCKET_EXISTS=1
+fi
+
+# VPC gateway endpoint for S3 (only if tagged microvm=managed).
+S3_ENDPOINT_ID=""
+if [[ -n "${VPC_ID}" ]]; then
+  S3_ENDPOINT_ID="$(aws ec2 describe-vpc-endpoints \
+    --region "${REGION}" \
+    --filters "Name=vpc-id,Values=${VPC_ID}" "Name=service-name,Values=com.amazonaws.${REGION}.s3" "${TAG_FILTER}" \
+    --query 'VpcEndpoints[0].VpcEndpointId' \
+    --output text 2>/dev/null || echo "None")"
+  [[ "${S3_ENDPOINT_ID}" == "None" ]] && S3_ENDPOINT_ID=""
+fi
+
 ROLE_EXISTS=0
 if aws iam get-role --role-name "${ROLE_NAME}" >/dev/null 2>&1; then
   ROLE_EXISTS=1
@@ -249,8 +328,9 @@ echo "Region: ${REGION}"
 echo "Account: ${ACCOUNT_ID}"
 echo
 echo "Will attempt to delete (missing items skipped):"
-printf "  AgentCore runtime  : %s -> %s\n" "${RUNTIME_NAME}"     "${RUNTIME_ID:-<not found>}"
-printf "  AgentCore runtime  : %s -> %s\n" "${RUNTIME_NAME_EFS}" "${RUNTIME_ID_EFS:-<not found>}"
+printf "  AgentCore runtime  : %s -> %s\n" "${RUNTIME_NAME}"        "${RUNTIME_ID:-<not found>}"
+printf "  AgentCore runtime  : %s -> %s\n" "${RUNTIME_NAME_EFS}"    "${RUNTIME_ID_EFS:-<not found>}"
+printf "  AgentCore runtime  : %s -> %s\n" "${RUNTIME_NAME_TIERED}" "${RUNTIME_ID_TIERED:-<not found>}"
 printf "  EFS access point   : %s\n" "${AP_ID:-<not found>}"
 if [[ "${#MOUNT_TARGET_IDS[@]}" -gt 0 ]]; then
   printf "  EFS mount targets  : %s\n" "${MOUNT_TARGET_IDS[*]}"
@@ -258,7 +338,20 @@ else
   printf "  EFS mount targets  : <none>\n"
 fi
 printf "  EFS filesystem     : %s\n" "${FS_ID:-<not found>}"
-printf "  Security group     : %s (microvm-efs-sg)\n" "${SG_ID:-<not found>}"
+printf "  S3 Files filesystem: %s\n" "${S3FILES_FS_ID:-<not found>}"
+if [[ "${S3_AP_EXISTS}" -eq 1 ]]; then
+  printf "  S3 access point    : %s\n" "${AP_NAME}"
+else
+  printf "  S3 access point    : <not found>\n"
+fi
+if [[ "${S3_BUCKET_EXISTS}" -eq 1 ]]; then
+  printf "  S3 bucket          : %s (objects + versions will be deleted)\n" "${BUCKET_NAME}"
+else
+  printf "  S3 bucket          : %s (<not found>)\n" "${BUCKET_NAME}"
+fi
+printf "  S3 gateway endpoint: %s\n" "${S3_ENDPOINT_ID:-<not found>}"
+printf "  Security group     : %s (microvm-efs-sg)\n"    "${SG_ID:-<not found>}"
+printf "  Security group     : %s (microvm-tiered-sg)\n" "${SG_ID_TIERED:-<not found>}"
 if [[ "${#SUBNET_IDS[@]}" -gt 0 ]]; then
   printf "  Subnets            : %s\n" "${SUBNET_IDS[*]}"
 else
@@ -266,7 +359,7 @@ else
 fi
 printf "  VPC                : %s\n" "${VPC_ID:-<not found>}"
 if [[ "${ROLE_EXISTS}" -eq 1 ]]; then
-  printf "  IAM role           : %s (inline: ecr-pull, microvm-efs; detach: CloudWatchLogsFullAccess)\n" "${ROLE_NAME}"
+  printf "  IAM role           : %s (inline: ecr-pull, microvm-efs, microvm-tiered; detach: CloudWatchLogsFullAccess)\n" "${ROLE_NAME}"
 else
   printf "  IAM role           : <not found>\n"
 fi
@@ -306,6 +399,14 @@ if [[ -n "${RUNTIME_ID_EFS}" ]]; then
       --agent-runtime-id "${RUNTIME_ID_EFS}" || warn "delete failed (continuing)"
 else
   info "Runtime ${RUNTIME_NAME_EFS} not found, skipping."
+fi
+if [[ -n "${RUNTIME_ID_TIERED}" ]]; then
+  confirm_run "Deletes the tiered-mode AgentCore runtime ${RUNTIME_NAME_TIERED} (${RUNTIME_ID_TIERED})." \
+    aws bedrock-agentcore-control delete-agent-runtime \
+      --region "${REGION}" \
+      --agent-runtime-id "${RUNTIME_ID_TIERED}" || warn "delete failed (continuing)"
+else
+  info "Runtime ${RUNTIME_NAME_TIERED} not found, skipping."
 fi
 
 # ---------------------------------------------------------------------------
@@ -386,43 +487,248 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Security group
+# 5. S3 Files association (must be removed before the filesystem)
+#
+# TODO at first real run: if the `aws s3files` API doesn't match (the
+# command name / flag shape / response field names), adjust here and in
+# the steps below. setup_tiered.sh has the same TODO.
 # ---------------------------------------------------------------------------
 
-step "Delete security group"
-if [[ -n "${SG_ID}" ]]; then
-  SG_TAGS="$(aws ec2 describe-security-groups \
+step "Delete S3 Files association"
+if [[ -n "${S3FILES_FS_ID}" ]]; then
+  # List associations; for each, disassociate. We don't tag-check the
+  # filesystem here because the FS itself is tag-checked below and we
+  # only got here via the tag-filtered discovery query.
+  ASSOC_IDS_RAW="$(aws s3files list-associations \
     --region "${REGION}" \
-    --group-ids "${SG_ID}" \
-    --query 'SecurityGroups[0].Tags' \
-    --output json 2>/dev/null || echo "[]")"
-  if has_managed_tag "${SG_TAGS}"; then
-    # ENIs from the mount targets can linger for a few seconds even after
-    # the MTs report deleted. Retry briefly to absorb that race.
-    SG_DELETED=0
-    for _ in $(seq 1 12); do
-      if aws ec2 delete-security-group \
+    --filesystem-id "${S3FILES_FS_ID}" \
+    --query 'associations[].associationId' \
+    --output text 2>/dev/null || echo "")"
+  if [[ -n "${ASSOC_IDS_RAW}" && "${ASSOC_IDS_RAW}" != "None" ]]; then
+    for ASSOC in ${ASSOC_IDS_RAW}; do
+      confirm_run "Disassociates ${ASSOC} from S3 Files filesystem ${S3FILES_FS_ID}." \
+        aws s3files disassociate \
           --region "${REGION}" \
-          --group-id "${SG_ID}" 2>/dev/null; then
-        SG_DELETED=1
-        ok "Deleted SG ${SG_ID}."
-        break
-      fi
-      info "  SG ${SG_ID} still has dependents, sleeping 5s..."
-      sleep 5
+          --filesystem-id "${S3FILES_FS_ID}" \
+          --association-id "${ASSOC}" || warn "disassociate failed (continuing)"
     done
-    if [[ "${SG_DELETED}" -ne 1 ]]; then
-      warn "Could not delete SG ${SG_ID} (still has dependents). Retry later or delete manually."
-    fi
   else
-    err "SG ${SG_ID} is missing the microvm=managed tag. Refusing to delete."
+    info "No associations to remove."
   fi
 else
-  info "No security group to delete."
+  info "No S3 Files filesystem -- skipping association cleanup."
 fi
 
 # ---------------------------------------------------------------------------
-# 6. Subnets
+# 6. S3 Files filesystem
+# ---------------------------------------------------------------------------
+
+step "Delete S3 Files filesystem"
+if [[ -n "${S3FILES_FS_ID}" ]]; then
+  # The discovery query already required microvm=managed; re-fetch the
+  # tag block for an explicit pre-delete check (mirrors EFS pattern).
+  S3FILES_TAGS="$(aws s3files list-file-systems \
+    --region "${REGION}" \
+    --query "fileSystems[?fileSystemId=='${S3FILES_FS_ID}'].Tags | [0]" \
+    --output json 2>/dev/null || echo "[]")"
+  if has_managed_tag "${S3FILES_TAGS}"; then
+    confirm_run "Deletes the S3 Files filesystem ${S3FILES_FS_ID}." \
+      aws s3files delete-file-system \
+        --region "${REGION}" \
+        --filesystem-id "${S3FILES_FS_ID}" || warn "delete failed (continuing)"
+  else
+    err "S3 Files filesystem ${S3FILES_FS_ID} is missing the microvm=managed tag. Refusing to delete."
+  fi
+else
+  info "No S3 Files filesystem to delete."
+fi
+
+# ---------------------------------------------------------------------------
+# 7. S3 access point (microvm-workspace)
+# ---------------------------------------------------------------------------
+
+step "Delete S3 access point"
+if [[ "${S3_AP_EXISTS}" -eq 1 ]]; then
+  # s3control tag listing requires the access-point ARN.
+  S3_AP_ARN="$(aws s3control get-access-point \
+    --account-id "${ACCOUNT_ID}" \
+    --region "${REGION}" \
+    --name "${AP_NAME}" \
+    --query 'AccessPointArn' \
+    --output text 2>/dev/null || echo "")"
+  S3_AP_TAGS="[]"
+  if [[ -n "${S3_AP_ARN}" && "${S3_AP_ARN}" != "None" ]]; then
+    S3_AP_TAGS="$(aws s3control get-access-point-tagging \
+      --account-id "${ACCOUNT_ID}" \
+      --region "${REGION}" \
+      --name "${AP_NAME}" \
+      --query 'Tags' \
+      --output json 2>/dev/null || echo "[]")"
+  fi
+  if has_managed_tag "${S3_AP_TAGS}"; then
+    confirm_run "Deletes the S3 access point ${AP_NAME}." \
+      aws s3control delete-access-point \
+        --account-id "${ACCOUNT_ID}" \
+        --region "${REGION}" \
+        --name "${AP_NAME}" || warn "delete failed (continuing)"
+  else
+    err "S3 access point ${AP_NAME} is missing the microvm=managed tag. Refusing to delete."
+  fi
+else
+  info "No S3 access point to delete."
+fi
+
+# ---------------------------------------------------------------------------
+# 8. S3 bucket (microvm-workspace-<account>-<region>)
+#
+# Bucket has versioning ENABLED -- a plain `aws s3 rm --recursive` leaves
+# object versions and delete-markers behind, which would block delete-bucket.
+# We use list-object-versions + delete-objects to clear everything, then
+# delete the bucket. If the bucket is non-empty when discovered, force the
+# user to type the bucket name (unless --yes was passed).
+# ---------------------------------------------------------------------------
+
+step "Delete S3 bucket"
+if [[ "${S3_BUCKET_EXISTS}" -eq 1 ]]; then
+  BUCKET_TAGS="$(aws s3api get-bucket-tagging \
+    --bucket "${BUCKET_NAME}" \
+    --region "${REGION}" \
+    --query 'TagSet' \
+    --output json 2>/dev/null || echo "[]")"
+  if ! has_managed_tag "${BUCKET_TAGS}"; then
+    err "S3 bucket ${BUCKET_NAME} is missing the microvm=managed tag. Refusing to delete."
+  else
+    # Count objects (one page is enough -- we only need empty/non-empty).
+    OBJ_COUNT="$(aws s3api list-object-versions \
+      --bucket "${BUCKET_NAME}" \
+      --region "${REGION}" \
+      --max-items 1 \
+      --query 'length(Versions || `[]`) + length(DeleteMarkers || `[]`)' \
+      --output text 2>/dev/null || echo "0")"
+    PROCEED=1
+    if [[ "${OBJ_COUNT}" != "0" && "${ASSUME_YES}" -ne 1 ]]; then
+      printf "\n${C_RED}${C_BOLD}!!  WARNING  !!${C_RESET}\n"
+      printf "${C_YELLOW}Bucket ${BUCKET_NAME} is NOT empty.${C_RESET}\n"
+      printf "${C_YELLOW}This bucket contains your workspaces and snapshots.${C_RESET}\n"
+      printf "${C_YELLOW}Deleting it will permanently destroy all sandbox state.${C_RESET}\n\n"
+      read -r -p "Type the bucket name (${BUCKET_NAME}) to confirm: " typed_name
+      if [[ "${typed_name}" != "${BUCKET_NAME}" ]]; then
+        warn "Bucket name did not match. Skipping bucket delete."
+        PROCEED=0
+      fi
+    fi
+    if [[ "${PROCEED}" -eq 1 ]]; then
+      # Empty the bucket: delete all object versions + delete-markers in
+      # batches of up to 1000 (the delete-objects API limit).
+      info "Emptying ${BUCKET_NAME} (versions + delete-markers)..."
+      while :; do
+        VERSIONS_JSON="$(aws s3api list-object-versions \
+          --bucket "${BUCKET_NAME}" \
+          --region "${REGION}" \
+          --max-items 1000 \
+          --output json 2>/dev/null || echo '{}')"
+        DELETE_PAYLOAD="$(echo "${VERSIONS_JSON}" | jq -c '
+          {Objects: (
+            ((.Versions // []) | map({Key, VersionId})) +
+            ((.DeleteMarkers // []) | map({Key, VersionId}))
+          ), Quiet: true}
+        ')"
+        N="$(echo "${DELETE_PAYLOAD}" | jq '.Objects | length')"
+        if [[ "${N}" -eq 0 ]]; then
+          break
+        fi
+        aws s3api delete-objects \
+          --bucket "${BUCKET_NAME}" \
+          --region "${REGION}" \
+          --delete "${DELETE_PAYLOAD}" >/dev/null \
+          || { warn "delete-objects batch failed (continuing)"; break; }
+        info "  removed ${N} object version(s)/marker(s)..."
+      done
+      confirm_run "Deletes the S3 bucket ${BUCKET_NAME}." \
+        aws s3api delete-bucket \
+          --bucket "${BUCKET_NAME}" \
+          --region "${REGION}" || warn "delete failed (continuing)"
+    fi
+  fi
+else
+  info "Bucket ${BUCKET_NAME} not found, skipping."
+fi
+
+# ---------------------------------------------------------------------------
+# 9. VPC gateway endpoint for S3
+# ---------------------------------------------------------------------------
+
+step "Delete VPC gateway endpoint (S3)"
+if [[ -n "${S3_ENDPOINT_ID}" ]]; then
+  # Tag pre-check: the describe filter already required microvm=managed,
+  # but be explicit for symmetry with the other resources.
+  EP_TAGS="$(aws ec2 describe-vpc-endpoints \
+    --region "${REGION}" \
+    --vpc-endpoint-ids "${S3_ENDPOINT_ID}" \
+    --query 'VpcEndpoints[0].Tags' \
+    --output json 2>/dev/null || echo "[]")"
+  if has_managed_tag "${EP_TAGS}"; then
+    confirm_run "Deletes the S3 VPC gateway endpoint ${S3_ENDPOINT_ID}." \
+      aws ec2 delete-vpc-endpoints \
+        --region "${REGION}" \
+        --vpc-endpoint-ids "${S3_ENDPOINT_ID}" || warn "delete failed (continuing)"
+  else
+    err "VPC endpoint ${S3_ENDPOINT_ID} is missing the microvm=managed tag. Refusing to delete."
+  fi
+else
+  info "No S3 gateway endpoint to delete."
+fi
+
+# ---------------------------------------------------------------------------
+# 10. Security groups (microvm-efs-sg, microvm-tiered-sg)
+# ---------------------------------------------------------------------------
+
+# Helper: tag-check + retry-delete a single SG. Mirrors the original
+# retry loop -- ENIs from mount targets / VPC endpoints can linger a few
+# seconds after their parents report deleted.
+delete_sg() {
+  local sg_id="$1"
+  local sg_tags
+  sg_tags="$(aws ec2 describe-security-groups \
+    --region "${REGION}" \
+    --group-ids "${sg_id}" \
+    --query 'SecurityGroups[0].Tags' \
+    --output json 2>/dev/null || echo "[]")"
+  if ! has_managed_tag "${sg_tags}"; then
+    err "SG ${sg_id} is missing the microvm=managed tag. Refusing to delete."
+    return
+  fi
+  local sg_deleted=0
+  for _ in $(seq 1 12); do
+    if aws ec2 delete-security-group \
+        --region "${REGION}" \
+        --group-id "${sg_id}" 2>/dev/null; then
+      sg_deleted=1
+      ok "Deleted SG ${sg_id}."
+      break
+    fi
+    info "  SG ${sg_id} still has dependents, sleeping 5s..."
+    sleep 5
+  done
+  if [[ "${sg_deleted}" -ne 1 ]]; then
+    warn "Could not delete SG ${sg_id} (still has dependents). Retry later or delete manually."
+  fi
+}
+
+step "Delete security groups"
+if [[ -n "${SG_ID}" ]]; then
+  delete_sg "${SG_ID}"
+else
+  info "No microvm-efs-sg to delete."
+fi
+if [[ -n "${SG_ID_TIERED}" ]]; then
+  delete_sg "${SG_ID_TIERED}"
+else
+  info "No microvm-tiered-sg to delete."
+fi
+
+# ---------------------------------------------------------------------------
+# 11. Subnets
 # ---------------------------------------------------------------------------
 
 step "Delete subnets"
@@ -458,7 +764,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 7. VPC
+# 12. VPC
 # ---------------------------------------------------------------------------
 
 step "Delete VPC"
@@ -481,13 +787,13 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 8. IAM role (only policies setup.sh / setup_efs.sh created)
+# 13. IAM role (only policies setup.sh / setup_efs.sh / setup_tiered.sh created)
 # ---------------------------------------------------------------------------
 
 step "Delete IAM role"
 if [[ "${ROLE_EXISTS}" -eq 1 ]]; then
   # Inline policies created by the setup scripts.
-  for POLICY in ecr-pull microvm-efs; do
+  for POLICY in ecr-pull microvm-efs microvm-tiered; do
     if aws iam get-role-policy --role-name "${ROLE_NAME}" --policy-name "${POLICY}" >/dev/null 2>&1; then
       confirm_run "Deletes inline policy ${POLICY} from ${ROLE_NAME}." \
         aws iam delete-role-policy \
@@ -537,7 +843,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 9. ECR repository
+# 14. ECR repository
 # ---------------------------------------------------------------------------
 
 step "Delete ECR repository"

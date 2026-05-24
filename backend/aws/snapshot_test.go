@@ -99,6 +99,13 @@ func TestTieredProvisioner_RejectsInvalidArn(t *testing.T) {
 		"not-an-arn",
 		"arn:aws:elasticfilesystem:us-east-1:123:access-point/fsap-abc",
 		"arn:aws:s3:::bucket",
+		"arn:aws:s3:us-east-1:123:accesspoint/",        // empty name
+		"arn:aws:s3:us-east-1:123:accesspoint/Foo",     // uppercase
+		"arn:aws:s3:us-east-1:123:accesspoint/foo_bar", // underscore
+		"arn:aws:s3:us-east-1:123:accesspoint/foo.bar", // dot
+		"arn:aws:s3:us-east-1:123:accesspoint/-foo",    // leading hyphen
+		"arn:aws:s3:us-east-1:123:accesspoint/foo-",    // trailing hyphen
+		"arn:aws:s3:us-east-1:123:bucket/foo",          // wrong resource type
 	}
 	for _, a := range cases {
 		_, err := awsbackend.ProvisionerFor("tiered", backend.LoginOpts{

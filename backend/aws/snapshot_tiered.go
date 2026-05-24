@@ -14,7 +14,7 @@ const (
 )
 
 // Resource segment of an S3 access-point ARN, e.g. accesspoint/microvm-files.
-var s3AccessPointResourceRe = regexp.MustCompile(`^accesspoint/[A-Za-z0-9._-]+$`)
+var s3AccessPointResourceRe = regexp.MustCompile(`^accesspoint/[a-z0-9]([a-z0-9-]{1,48}[a-z0-9])?$`)
 
 type tieredProvisioner struct {
 	accessPointArn string

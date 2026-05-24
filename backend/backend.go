@@ -54,6 +54,9 @@ type LoginOpts struct {
 	Rebuild        bool
 	SnapshotMode   string // "" | "none" | "s3" | "efs" | "tiered"
 	SnapshotBucket string // required when SnapshotMode is "s3" or "tiered"
+	// EFS-only. Required when SnapshotMode == "efs"; ignored otherwise.
+	EFSAccessPointArn string
+	EFSMountPath      string // default "/mnt/efs"
 }
 
 type ExecIO struct {

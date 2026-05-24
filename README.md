@@ -20,8 +20,8 @@ Pick a snapshot backend at runtime registration:
 
 ```sh
 microvm login --snapshot-mode s3 --snapshot-bucket my-bucket
-microvm login --snapshot-mode efs --efs-id fs-0123...   # PR2 (in progress)
-microvm login --snapshot-mode tiered --snapshot-bucket b # PR3 (in progress)
+microvm login --snapshot-mode efs --efs-access-point-arn arn:aws:elasticfilesystem:us-east-1:123:access-point/fsap-...
+microvm login --snapshot-mode tiered --snapshot-bucket b   # PR3 (in progress)
 ```
 
 Modes:
@@ -49,8 +49,11 @@ Provision EFS once per environment:
 
 The script creates a VPC, two subnets, an EFS filesystem with mount targets in
 both AZs, a security group, an EFS access point, the IAM permissions, and a
-new AgentCore runtime named `microvm-shell-efs` configured for VPC mode +
+new AgentCore runtime named `microvm_shell_efs` configured for VPC mode +
 EFS mount at `/mnt/efs`. It prints the `microvm login` invocation to run.
+
+(The runtime name uses underscores because AgentCore's name regex
+forbids hyphens.)
 
 ### Teardown
 

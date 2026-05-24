@@ -20,10 +20,6 @@ type snapshotProvisioner interface {
 
 // ProvisionerFor returns the provisioner matching mode. Empty mode resolves to
 // "none" so existing deployments and tests keep working unchanged.
-//
-// efs and tiered return a deliberate not-implemented error so that
-// `microvm login --snapshot-mode efs` fails fast with a useful pointer to the
-// PR2/PR3 work, rather than silently accepting an unsupported mode.
 func ProvisionerFor(mode string, opts backend.LoginOpts) (snapshotProvisioner, error) {
 	mode = strings.TrimSpace(mode)
 	if mode == "" {
@@ -37,10 +33,7 @@ func ProvisionerFor(mode string, opts backend.LoginOpts) (snapshotProvisioner, e
 	case "efs":
 		return newEfsProvisioner(opts)
 	case "tiered":
-		return nil, fmt.Errorf(
-			"snapshot mode %q not implemented yet — see docs/plans/2026-05-23-snapshot-modes-design.md (PR3)",
-			mode,
-		)
+		return newTieredProvisioner(opts)
 	default:
 		return nil, fmt.Errorf(
 			"unknown snapshot mode %q (want one of: none, s3, efs, tiered)",

@@ -71,11 +71,65 @@ func TestEfsProvisioner_RespectsCustomMountPath(t *testing.T) {
 	assert.Equal(t, "/data", p.EnvOverrides()["MICROVM_EFS_MOUNT_PATH"])
 }
 
-func TestProvisionerFor_TieredNotImplemented(t *testing.T) {
-	_, err := awsbackend.ProvisionerFor("tiered", backend.LoginOpts{})
+func TestProvisionerFor_TieredMode(t *testing.T) {
+	p, err := awsbackend.ProvisionerFor("tiered", backend.LoginOpts{
+		S3FilesAccessPointArn: "arn:aws:s3:us-east-1:123:accesspoint/microvm-files",
+		S3FilesBucket:         "microvm-workspace-123",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "tiered", p.Mode())
+}
+
+func TestTieredProvisioner_RequiresAccessPointArn(t *testing.T) {
+	_, err := awsbackend.ProvisionerFor("tiered", backend.LoginOpts{S3FilesBucket: "b"})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not implemented")
-	assert.Contains(t, err.Error(), "PR3")
+	assert.Contains(t, err.Error(), "--s3-files-access-point-arn")
+}
+
+func TestTieredProvisioner_RequiresBucket(t *testing.T) {
+	_, err := awsbackend.ProvisionerFor("tiered", backend.LoginOpts{
+		S3FilesAccessPointArn: "arn:aws:s3:us-east-1:123:accesspoint/microvm-files",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--s3-files-bucket")
+}
+
+func TestTieredProvisioner_RejectsInvalidArn(t *testing.T) {
+	cases := []string{
+		"not-an-arn",
+		"arn:aws:elasticfilesystem:us-east-1:123:access-point/fsap-abc",
+		"arn:aws:s3:::bucket",
+	}
+	for _, a := range cases {
+		_, err := awsbackend.ProvisionerFor("tiered", backend.LoginOpts{
+			S3FilesAccessPointArn: a,
+			S3FilesBucket:         "b",
+		})
+		require.Errorf(t, err, "expected %q to be rejected", a)
+	}
+}
+
+func TestTieredProvisioner_EnvVars(t *testing.T) {
+	p, err := awsbackend.ProvisionerFor("tiered", backend.LoginOpts{
+		S3FilesAccessPointArn: "arn:aws:s3:us-east-1:123:accesspoint/microvm-files",
+		S3FilesBucket:         "microvm-workspace-123",
+	})
+	require.NoError(t, err)
+	env := p.EnvOverrides()
+	assert.Equal(t, "tiered", env["MICROVM_SNAPSHOT_MODE"])
+	assert.Equal(t, "microvm-workspace-123", env["MICROVM_S3FILES_BUCKET"])
+	assert.Equal(t, "/workspace", env["MICROVM_S3FILES_MOUNT_PATH"])
+	assert.Equal(t, "/var/microvm/cache", env["MICROVM_CACHE_ROOT"])
+}
+
+func TestTieredProvisioner_RespectsCustomMountPath(t *testing.T) {
+	p, err := awsbackend.ProvisionerFor("tiered", backend.LoginOpts{
+		S3FilesAccessPointArn: "arn:aws:s3:us-east-1:123:accesspoint/microvm-files",
+		S3FilesBucket:         "microvm-workspace-123",
+		S3FilesMountPath:      "/data",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "/data", p.EnvOverrides()["MICROVM_S3FILES_MOUNT_PATH"])
 }
 
 func TestProvisionerFor_UnknownMode(t *testing.T) {

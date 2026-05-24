@@ -4,8 +4,8 @@ Envelopes (unary HTTP path, POST /invocations):
     {"op": "exec",      "cmd": ["sh", "-lc", "..."]}
     {"op": "put",       "path": "/tmp/x", "b64": "..."}
     {"op": "get",       "path": "/tmp/x"}
-    {"op": "snapshot",  "name": "demo"}
-    {"op": "resume",    "alias": "sess-1"}
+    {"op": "snapshot",  "snap_id": "snp_...", "name": "demo", "mode": "s3"}
+    {"op": "resume",    "alias": "sess-1", "locator": "{...}", "mode": "s3"}
     {"op": "terminate"}
 
 The interactive shell runs over the WebSocket path (`/ws`) instead of the
@@ -27,6 +27,20 @@ try:
     from bedrock_agentcore import BedrockAgentCoreApp  # type: ignore
 except ImportError:  # pragma: no cover - allow tests without SDK installed
     BedrockAgentCoreApp = None  # type: ignore
+
+from snapshotter import Snapshotter, make_snapshotter
+
+# Resolved lazily on first snapshot/resume; module-level so a single process
+# uses one backend for its lifetime (mode is fixed at runtime registration).
+# Tests reset this between cases via the reset_snapshotter fixture.
+_snapshotter: Snapshotter | None = None
+
+
+def _get_snapshotter() -> Snapshotter:
+    global _snapshotter
+    if _snapshotter is None:
+        _snapshotter = make_snapshotter()
+    return _snapshotter
 
 # Match the Go side: AgentCore caps each WebSocket frame at 32 KB; chunk reads
 # slightly below that so we stay clear of any per-frame envelope overhead.
@@ -203,13 +217,23 @@ async def shell_session(websocket) -> None:
 
 
 def handle_snapshot(req: dict) -> dict:
-    alias = os.environ.get("BEDROCK_AGENTCORE_SESSION_ID", "")
-    return {"alias": alias, "name": req.get("name", "")}
+    name = req.get("name", "")
+    # Go side mints snap_id and sends it down so the shellagent can use it as
+    # the S3 key / EFS subdir / etc. Older clients fall back to name; failing
+    # both, we stamp a deterministic placeholder so an alias-only response is
+    # still well-formed.
+    snap_id = req.get("snap_id") or name or "snap"
+    try:
+        return _get_snapshotter().snapshot(snap_id, name)
+    except Exception as e:  # noqa: BLE001 — surface any backend error to the caller
+        return {"alias": "", "name": name, "locator": "", "error": str(e)}
 
 
 def handle_resume(req: dict) -> dict:
-    alias = req.get("alias", "") or os.environ.get("BEDROCK_AGENTCORE_SESSION_ID", "")
-    return {"alias": alias}
+    try:
+        return _get_snapshotter().resume(req.get("locator", ""), req.get("alias", ""))
+    except Exception as e:  # noqa: BLE001
+        return {"alias": "", "error": str(e)}
 
 
 def handle_terminate(req: dict) -> dict:

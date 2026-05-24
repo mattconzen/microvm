@@ -6,7 +6,19 @@ import base64
 import os
 import tempfile
 
+import pytest
+
 import app
+
+
+@pytest.fixture(autouse=True)
+def reset_snapshotter(monkeypatch):
+    # The module caches the Snapshotter on first use. Reset between tests so
+    # MICROVM_SNAPSHOT_MODE env changes take effect and tests stay isolated.
+    monkeypatch.delenv("MICROVM_SNAPSHOT_MODE", raising=False)
+    app._snapshotter = None
+    yield
+    app._snapshotter = None
 
 
 def test_exec_basic():
@@ -61,6 +73,7 @@ def test_snapshot_returns_alias(monkeypatch):
     out = app.handle_snapshot({"name": "demo"})
     assert out["alias"] == "sess-xyz"
     assert out["name"] == "demo"
+    assert out["locator"] == ""
 
 
 def test_snapshot_alias_empty_without_session_env(monkeypatch):
@@ -83,9 +96,22 @@ def test_resume_falls_back_to_env(monkeypatch):
 def test_dispatch_routes_snapshot_resume(monkeypatch):
     monkeypatch.setenv("BEDROCK_AGENTCORE_SESSION_ID", "sess-d")
     snap = app.dispatch({"op": "snapshot", "name": "n"})
-    assert snap == {"alias": "sess-d", "name": "n"}
+    assert snap["alias"] == "sess-d"
+    assert snap["name"] == "n"
+    assert snap["locator"] == ""
     res = app.dispatch({"op": "resume", "alias": "sess-abc"})
     assert res == {"alias": "sess-abc"}
+
+
+def test_snapshot_surfaces_backend_errors(monkeypatch):
+    # If make_snapshotter raises (bad env), handle_snapshot should return a
+    # well-formed dict with the error captured rather than propagate.
+    monkeypatch.setenv("MICROVM_SNAPSHOT_MODE", "bogus")
+    out = app.handle_snapshot({"name": "demo"})
+    assert out["alias"] == ""
+    assert out["name"] == "demo"
+    assert out["locator"] == ""
+    assert "unknown MICROVM_SNAPSHOT_MODE" in out["error"]
 
 
 def test_terminate_returns_ok():

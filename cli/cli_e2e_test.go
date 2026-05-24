@@ -142,6 +142,53 @@ func TestE2ESnapshotResume(t *testing.T) {
 	assert.Len(t, all, 2)
 }
 
+func TestE2ESnapshotPersistsModeAndLocator(t *testing.T) {
+	env := newTestEnv(t)
+	env.fake.snapshotMode = "s3"
+
+	sb := createSandbox(t, env.app, "modeful")
+	// Sandbox carries the runtime mode it was created under.
+	assert.Equal(t, "s3", sb.Mode)
+
+	snapOut := runCLIJSON(t, env.app, "sbx", "snapshot", sb.ID, "--name", "baseline")
+	var snap state.Snapshot
+	require.NoError(t, json.Unmarshal([]byte(snapOut), &snap))
+	assert.Equal(t, "s3", snap.Mode)
+	assert.Equal(t, "s3", snap.Kind)
+	assert.Contains(t, snap.Locator, "s3_uri")
+
+	// State.db row must carry the same mode/locator so post-restart resumes work.
+	stored, err := env.store.GetSnapshot(snap.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "s3", stored.Mode)
+	assert.Equal(t, snap.Locator, stored.Locator)
+
+	// fakeBackend recorded the snapshot call with the runtime mode.
+	require.Len(t, env.fake.snapshots, 1)
+	call := env.fake.snapshots[0]
+	assert.Equal(t, "s3", call.Mode)
+	assert.Equal(t, "baseline", call.Spec.Name)
+	assert.True(t, strings.HasPrefix(call.Spec.ID, "snp_"), "spec.ID should be minted before backend call, got %q", call.Spec.ID)
+}
+
+func TestE2EResumeRejectsModeMismatch(t *testing.T) {
+	env := newTestEnv(t)
+	env.fake.snapshotMode = "s3"
+
+	sb := createSandbox(t, env.app, "modeful")
+	snapOut := runCLIJSON(t, env.app, "sbx", "snapshot", sb.ID, "--name", "x")
+	var snap state.Snapshot
+	require.NoError(t, json.Unmarshal([]byte(snapOut), &snap))
+	require.Equal(t, "s3", snap.Mode)
+
+	// Flip the runtime mode so the snapshot now lives in the wrong runtime.
+	env.fake.snapshotMode = "none"
+	_, stderr, err := runCLI(t, env.app, "sbx", "resume", snap.ID, "--name", "should-fail")
+	require.Error(t, err)
+	combined := stderr + err.Error()
+	assert.Contains(t, combined, "does not match active runtime mode")
+}
+
 func TestE2ECopyRoundTrip(t *testing.T) {
 	env := newTestEnv(t)
 	sb := createSandbox(t, env.app, "copyme")

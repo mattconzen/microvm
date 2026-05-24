@@ -45,12 +45,17 @@ func (f *fakeBackend) Name() string { return f.name }
 func (f *fakeBackend) Login(_ context.Context, _ backend.LoginOpts) error { return nil }
 
 func (f *fakeBackend) Create(_ context.Context, spec backend.SandboxSpec) (backend.Sandbox, error) {
+	mode := f.snapshotMode
+	if mode == "" {
+		mode = "none"
+	}
 	return backend.Sandbox{
 		Provider:  f.name,
 		Image:     spec.Image,
 		Name:      spec.Name,
 		CPUs:      spec.CPUs,
 		MemoryMB:  spec.MemoryMB,
+		Mode:      mode,
 		CreatedAt: f.now(),
 	}, nil
 }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import os
+import shutil as _shutil
 import tempfile
 
 import pytest
@@ -171,6 +172,51 @@ def test_parse_resize_rejects_other_types():
     assert app.parse_resize({"type": "resize", "cols": 0, "rows": 24}) is None
     assert app.parse_resize({"type": "resize", "cols": "huh", "rows": 24}) is None
     assert app.parse_resize(123) is None
+
+
+def test_checkpoint_requires_sandbox_id():
+    out = app.handle_checkpoint({})
+    assert out["ok"] is False
+    assert "sandbox_id required" in out["error"]
+
+
+def test_checkpoint_rejects_non_tiered_mode(monkeypatch):
+    monkeypatch.setenv("MICROVM_SNAPSHOT_MODE", "s3")
+    out = app.handle_checkpoint({"sandbox_id": "mvm_a"})
+    assert out["ok"] is False
+    assert "tiered mode" in out["error"]
+
+
+def test_checkpoint_rsyncs_promote_into_workspace(tmp_path, monkeypatch):
+    monkeypatch.setenv("MICROVM_SNAPSHOT_MODE", "tiered")
+    monkeypatch.setenv("MICROVM_CACHE_ROOT", str(tmp_path / "cache"))
+    monkeypatch.setenv("MICROVM_S3FILES_MOUNT_PATH", str(tmp_path / "workspace"))
+
+    promote = tmp_path / "cache" / "mvm_a" / "promote"
+    promote.mkdir(parents=True)
+    (promote / "artifact.txt").write_text("hello")
+
+    if not _shutil.which("rsync"):
+        pytest.skip("rsync not installed")
+
+    out = app.handle_checkpoint({"sandbox_id": "mvm_a"})
+    assert out["ok"] is True
+    assert (tmp_path / "workspace" / "mvm_a" / "cache-promoted" / "artifact.txt").read_text() == "hello"
+
+
+def test_checkpoint_rejects_traversal_sandbox_id():
+    out = app.handle_checkpoint({"sandbox_id": "../etc"})
+    assert out["ok"] is False
+    assert "invalid" in out["error"]
+
+
+def test_dispatch_routes_checkpoint(monkeypatch):
+    monkeypatch.setenv("MICROVM_SNAPSHOT_MODE", "tiered")
+    out = app.dispatch({"op": "checkpoint", "sandbox_id": "mvm_a"})
+    # Either ok=True (rsync ran) or ok=False with an error;
+    # what we're verifying is that dispatch routed to handle_checkpoint
+    # (not "unknown op").
+    assert "ok" in out
 
 
 def test_shell_session_callable_exists():

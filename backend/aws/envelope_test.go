@@ -81,6 +81,14 @@ func TestInjectSandboxID_PreservesOtherFields(t *testing.T) {
 	assert.Equal(t, "efs", got.Mode)
 }
 
+func TestCheckpointRequest(t *testing.T) {
+	b, err := CheckpointRequest()
+	require.NoError(t, err)
+	var got Request
+	require.NoError(t, json.Unmarshal(b, &got))
+	assert.Equal(t, OpCheckpoint, got.Op)
+}
+
 func TestInjectSandboxID_EmptyIsNoop(t *testing.T) {
 	orig := []byte(`{"op":"exec","cmd":["echo","hi"]}`)
 	patched, err := injectSandboxID(orig, "")

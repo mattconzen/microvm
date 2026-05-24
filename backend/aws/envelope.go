@@ -10,12 +10,13 @@ import (
 type Op string
 
 const (
-	OpExec      Op = "exec"
-	OpPut       Op = "put"
-	OpGet       Op = "get"
-	OpSnapshot  Op = "snapshot"
-	OpResume    Op = "resume"
-	OpTerminate Op = "terminate"
+	OpExec       Op = "exec"
+	OpPut        Op = "put"
+	OpGet        Op = "get"
+	OpSnapshot   Op = "snapshot"
+	OpResume     Op = "resume"
+	OpTerminate  Op = "terminate"
+	OpCheckpoint Op = "checkpoint"
 )
 
 type Request struct {
@@ -104,6 +105,10 @@ func ResumeRequest(alias, locator, mode string) ([]byte, error) {
 
 func TerminateRequest() ([]byte, error) {
 	return json.Marshal(Request{Op: OpTerminate})
+}
+
+func CheckpointRequest() ([]byte, error) {
+	return json.Marshal(Request{Op: OpCheckpoint})
 }
 
 func DecodeB64(s string) ([]byte, error) {

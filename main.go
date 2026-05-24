@@ -57,6 +57,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("init aws backend: %w", err)
 	}
+	aws.WithStore(store)
 	reg.Register(aws)
 
 	app := &cli.App{

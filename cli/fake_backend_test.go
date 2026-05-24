@@ -15,13 +15,21 @@ type execCall struct {
 	Cmd       []string
 }
 
+type snapshotCall struct {
+	SessionID string
+	Spec      backend.SnapshotSpec
+	Mode      string
+}
+
 type fakeBackend struct {
-	mu     sync.Mutex
-	name   string
-	files  map[string][]byte
-	execs  []execCall
-	execFn func(sb backend.Sandbox, cmd []string, io backend.ExecIO) (int, error)
-	now    func() time.Time
+	mu           sync.Mutex
+	name         string
+	files        map[string][]byte
+	execs        []execCall
+	snapshots    []snapshotCall
+	snapshotMode string // runtime mode the fake claims to have been registered with
+	execFn       func(sb backend.Sandbox, cmd []string, io backend.ExecIO) (int, error)
+	now          func() time.Time
 }
 
 func newFakeBackend() *fakeBackend {
@@ -91,22 +99,54 @@ func (f *fakeBackend) CopyFrom(_ context.Context, _ backend.Sandbox, remotePath,
 
 func (f *fakeBackend) Shell(_ context.Context, _ backend.Sandbox, _ backend.TTY) error { return nil }
 
-func (f *fakeBackend) Snapshot(_ context.Context, sb backend.Sandbox, name string) (backend.Snapshot, error) {
+func (f *fakeBackend) Snapshot(_ context.Context, sb backend.Sandbox, spec backend.SnapshotSpec) (backend.Snapshot, error) {
+	mode := f.snapshotMode
+	if mode == "" {
+		mode = "none"
+	}
+	kind := "alias"
+	locator := ""
+	if mode != "none" {
+		kind = mode
+		// Fake locator schema is mode-specific but opaque to shared code; the
+		// only requirement is it round-trips through state and back to Resume.
+		locator = fmt.Sprintf(`{"%s_uri":"fake://%s/%s"}`, mode, mode, spec.ID)
+	}
+	f.mu.Lock()
+	f.snapshots = append(f.snapshots, snapshotCall{SessionID: sb.SessionID, Spec: spec, Mode: mode})
+	f.mu.Unlock()
 	return backend.Snapshot{
 		SandboxID:       sb.ID,
 		Provider:        f.name,
 		TargetSessionID: sb.SessionID,
-		Kind:            "alias",
-		Name:            name,
+		Kind:            kind,
+		Mode:            mode,
+		Locator:         locator,
+		Name:            spec.Name,
 		CreatedAt:       f.now(),
 	}, nil
 }
 
 func (f *fakeBackend) Resume(_ context.Context, snap backend.Snapshot, spec backend.SandboxSpec) (backend.Sandbox, error) {
+	runtimeMode := f.snapshotMode
+	if runtimeMode == "" {
+		runtimeMode = "none"
+	}
+	snapMode := snap.Mode
+	if snapMode == "" {
+		snapMode = "none"
+	}
+	if snapMode != runtimeMode {
+		return backend.Sandbox{}, fmt.Errorf(
+			"snapshot mode %q does not match active runtime mode %q",
+			snapMode, runtimeMode,
+		)
+	}
 	return backend.Sandbox{
 		Provider:  f.name,
 		SessionID: snap.TargetSessionID,
 		Name:      spec.Name,
+		Mode:      snapMode,
 		CreatedAt: f.now(),
 	}, nil
 }

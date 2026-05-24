@@ -142,11 +142,19 @@ func TestSnapshotIsAlias(t *testing.T) {
 		return b
 	}}
 	b, _ := newTestBackend(t, fi)
-	snap, err := b.Snapshot(context.Background(), backend.Sandbox{ID: "mvm_abc", SessionID: "sess-1"}, "demo")
+	snap, err := b.Snapshot(
+		context.Background(),
+		backend.Sandbox{ID: "mvm_abc", SessionID: "sess-1"},
+		backend.SnapshotSpec{ID: "snp_1", Name: "demo"},
+	)
 	require.NoError(t, err)
 	assert.Equal(t, awsbackend.OpSnapshot, captured.Op)
 	assert.Equal(t, "demo", captured.Name)
+	assert.Equal(t, "snp_1", captured.SnapID)
+	assert.Equal(t, "none", captured.Mode)
 	assert.Equal(t, "alias", snap.Kind)
+	assert.Equal(t, "none", snap.Mode)
+	assert.Empty(t, snap.Locator)
 	assert.Equal(t, "sess-1", snap.TargetSessionID)
 	assert.Equal(t, "mvm_abc", snap.SandboxID)
 	assert.Equal(t, "demo", snap.Name)
@@ -160,7 +168,11 @@ func TestSnapshotFallsBackToSessionIDWhenAliasEmpty(t *testing.T) {
 		return b
 	}}
 	b, _ := newTestBackend(t, fi)
-	snap, err := b.Snapshot(context.Background(), backend.Sandbox{ID: "mvm_abc", SessionID: "sess-fallback"}, "x")
+	snap, err := b.Snapshot(
+		context.Background(),
+		backend.Sandbox{ID: "mvm_abc", SessionID: "sess-fallback"},
+		backend.SnapshotSpec{ID: "snp_2", Name: "x"},
+	)
 	require.NoError(t, err)
 	assert.Equal(t, "sess-fallback", snap.TargetSessionID)
 }
@@ -171,9 +183,40 @@ func TestSnapshotReturnsAgentError(t *testing.T) {
 		return b
 	}}
 	b, _ := newTestBackend(t, fi)
-	_, err := b.Snapshot(context.Background(), backend.Sandbox{ID: "mvm_abc", SessionID: "s"}, "x")
+	_, err := b.Snapshot(
+		context.Background(),
+		backend.Sandbox{ID: "mvm_abc", SessionID: "s"},
+		backend.SnapshotSpec{ID: "snp_3", Name: "x"},
+	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no can do")
+}
+
+func TestSnapshotIncludesS3ModeAndLocator(t *testing.T) {
+	var captured awsbackend.Request
+	fi := &fakeInvoker{respond: func(req []byte) []byte {
+		_ = json.Unmarshal(req, &captured)
+		b, _ := json.Marshal(awsbackend.SnapshotResponse{
+			Alias:   "sess-1",
+			Locator: `{"s3_uri":"s3://my-bucket/microvm/snp_xyz.tar.gz"}`,
+		})
+		return b
+	}}
+	b, cfg := newTestBackend(t, fi)
+	cfg.AWS.SnapshotMode = "s3"
+	cfg.AWS.SnapshotBucket = "my-bucket"
+
+	snap, err := b.Snapshot(
+		context.Background(),
+		backend.Sandbox{ID: "mvm_abc", SessionID: "sess-1"},
+		backend.SnapshotSpec{ID: "snp_xyz", Name: "baseline"},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "s3", captured.Mode)
+	assert.Equal(t, "snp_xyz", captured.SnapID)
+	assert.Equal(t, "s3", snap.Mode)
+	assert.Equal(t, "s3", snap.Kind)
+	assert.Contains(t, snap.Locator, "s3://my-bucket/")
 }
 
 func TestResumeFromAliasReusesSession(t *testing.T) {
@@ -211,14 +254,36 @@ func TestResumeRebindsToNewAlias(t *testing.T) {
 	assert.Equal(t, "sess-2", sb.SessionID)
 }
 
-func TestResumeRejectsUnsupportedKind(t *testing.T) {
-	b, _ := newTestBackend(t, &fakeInvoker{respond: func(_ []byte) []byte { return nil }})
+func TestResumeRejectsModeMismatch(t *testing.T) {
+	b, cfg := newTestBackend(t, &fakeInvoker{respond: func(_ []byte) []byte { return nil }})
+	cfg.AWS.SnapshotMode = "s3"
+	cfg.AWS.SnapshotBucket = "my-bucket"
+
+	// Snapshot was taken in "none" mode but the active runtime is "s3".
 	_, err := b.Resume(context.Background(),
-		backend.Snapshot{Kind: "checkpoint", TargetSessionID: "sess-1", Provider: "aws"},
+		backend.Snapshot{Kind: "alias", Mode: "none", TargetSessionID: "sess-1", Provider: "aws"},
 		backend.SandboxSpec{},
 	)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unsupported snapshot kind")
+	assert.Contains(t, err.Error(), "does not match active runtime mode")
+	assert.Contains(t, err.Error(), "--snapshot-mode none")
+}
+
+func TestResumeLegacySnapshotInNoneMode(t *testing.T) {
+	// Legacy records may have Mode="" (pre-mode). With the runtime also in
+	// none mode, both normalize to "none" and resume succeeds.
+	fi := &fakeInvoker{respond: func(_ []byte) []byte {
+		b, _ := json.Marshal(awsbackend.ResumeResponse{Alias: "sess-1"})
+		return b
+	}}
+	b, _ := newTestBackend(t, fi)
+	sb, err := b.Resume(context.Background(),
+		backend.Snapshot{Kind: "alias", TargetSessionID: "sess-1", Provider: "aws"},
+		backend.SandboxSpec{Name: "resumed"},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "sess-1", sb.SessionID)
+	assert.Equal(t, "none", sb.Mode)
 }
 
 func TestTerminateSendsEnvelope(t *testing.T) {
@@ -269,4 +334,44 @@ func TestLoginWithRuntimeArnPersists(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "us-west-2", cfg.AWS.Region)
 	assert.Contains(t, cfg.AWS.AgentRuntimeArn, "microvm-shell")
+	// Default snapshot mode normalizes to "none".
+	assert.Equal(t, "none", cfg.AWS.SnapshotMode)
+}
+
+func TestLoginPersistsSnapshotMode(t *testing.T) {
+	t.Setenv("MICROVM_HOME", t.TempDir())
+	cfg := &config.Config{DefaultProvider: "aws"}
+	b := awsbackend.New(cfg, &fakeInvoker{}, fakeControl{}, fakeIdentity{})
+	err := b.Login(context.Background(), backend.LoginOpts{
+		RuntimeArn:     "arn:aws:bedrock-agentcore:us-east-1:123:runtime/microvm-shell",
+		SnapshotMode:   "s3",
+		SnapshotBucket: "my-bucket",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "s3", cfg.AWS.SnapshotMode)
+	assert.Equal(t, "my-bucket", cfg.AWS.SnapshotBucket)
+}
+
+func TestLoginRejectsS3WithoutBucket(t *testing.T) {
+	t.Setenv("MICROVM_HOME", t.TempDir())
+	cfg := &config.Config{DefaultProvider: "aws"}
+	b := awsbackend.New(cfg, &fakeInvoker{}, fakeControl{}, fakeIdentity{})
+	err := b.Login(context.Background(), backend.LoginOpts{
+		RuntimeArn:   "arn:aws:bedrock-agentcore:us-east-1:123:runtime/microvm-shell",
+		SnapshotMode: "s3",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--snapshot-bucket")
+}
+
+func TestLoginRejectsUnknownMode(t *testing.T) {
+	t.Setenv("MICROVM_HOME", t.TempDir())
+	cfg := &config.Config{DefaultProvider: "aws"}
+	b := awsbackend.New(cfg, &fakeInvoker{}, fakeControl{}, fakeIdentity{})
+	err := b.Login(context.Background(), backend.LoginOpts{
+		RuntimeArn:   "arn:aws:bedrock-agentcore:us-east-1:123:runtime/microvm-shell",
+		SnapshotMode: "bogus",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown snapshot mode")
 }

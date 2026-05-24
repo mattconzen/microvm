@@ -70,7 +70,7 @@ or use it to re-fork later.`,
 				backend.SandboxSpec{Name: name, ID: newID},
 			)
 			if err != nil {
-				return fmt.Errorf("fork: resume into new sandbox: %w", err)
+				return fmt.Errorf("fork: resume into new sandbox (intermediate snapshot %s preserved; you can sbx resume it manually): %w", snapRec.ID, err)
 			}
 
 			rec := state.Sandbox{

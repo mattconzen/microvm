@@ -313,6 +313,24 @@ func TestE2ERevertRequiresSnapshotFlag(t *testing.T) {
 	require.Error(t, err) // cobra rejects missing required flag
 }
 
+func TestE2ECreateFromSnapshot(t *testing.T) {
+	env := newTestEnv(t)
+	env.fake.snapshotMode = "tiered"
+
+	src := createSandbox(t, env.app, "src")
+	snapOut := runCLIJSON(t, env.app, "sbx", "snapshot", src.ID, "--name", "baseline")
+	var snap state.Snapshot
+	require.NoError(t, json.Unmarshal([]byte(snapOut), &snap))
+
+	forkedOut := runCLIJSON(t, env.app, "sbx", "create", "--name", "from-snap", "--from-snapshot", snap.ID)
+	var forked state.Sandbox
+	require.NoError(t, json.Unmarshal([]byte(forkedOut), &forked))
+	assert.NotEqual(t, src.ID, forked.ID, "minted a new sandbox id")
+	assert.Equal(t, "from-snap", forked.Name)
+	assert.Equal(t, snap.ID, forked.Labels["created_from"])
+	assert.Equal(t, "tiered", forked.Mode)
+}
+
 func TestE2ECopyRoundTrip(t *testing.T) {
 	env := newTestEnv(t)
 	sb := createSandbox(t, env.app, "copyme")

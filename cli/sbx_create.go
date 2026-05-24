@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -26,6 +27,46 @@ func newCreateCmd(ctx context.Context, app *App, g *GlobalFlags) *cobra.Command 
 			b, err := resolveBackend(app, g)
 			if err != nil {
 				return err
+			}
+			if fromSnap != "" {
+				snap, err := app.Store.GetSnapshot(fromSnap)
+				if err != nil {
+					return fmt.Errorf("load snapshot: %w", err)
+				}
+				newID := state.NewSandboxID()
+				resumedSb, err := b.Resume(ctx,
+					backend.Snapshot{
+						ID:              snap.ID,
+						SandboxID:       snap.SandboxID,
+						Provider:        snap.Provider,
+						TargetSessionID: snap.TargetSessionID,
+						Kind:            snap.Kind,
+						Mode:            snap.Mode,
+						Locator:         snap.Locator,
+						Name:            snap.Name,
+					},
+					backend.SandboxSpec{Name: name, ID: newID},
+				)
+				if err != nil {
+					return fmt.Errorf("create --from-snapshot: %w", err)
+				}
+				rec := state.Sandbox{
+					ID:        newID,
+					Provider:  b.Name(),
+					SessionID: resumedSb.SessionID,
+					Image:     image,
+					Name:      name,
+					CPUs:      cpus,
+					MemoryMB:  mem,
+					Mode:      resumedSb.Mode,
+					CreatedAt: time.Now(),
+					LastUsed:  time.Now(),
+					Labels:    map[string]string{"created_from": snap.ID},
+				}
+				if err := app.Store.PutSandbox(rec); err != nil {
+					return err
+				}
+				return writeSandbox(cmd, g, rec)
 			}
 			spec := backend.SandboxSpec{
 				Image:    image,

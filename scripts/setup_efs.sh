@@ -109,7 +109,7 @@ if [[ "${VPC_ID}" == "None" || -z "${VPC_ID}" ]]; then
     aws ec2 create-vpc \
       --region "${REGION}" \
       --cidr-block "${VPC_CIDR}" \
-      --tag-specifications "ResourceType=vpc,Tags=[{${TAG_KV}}]"
+      --tag-specifications "ResourceType=vpc,Tags=[{${TAG_KV}},{Key=Name,Value=microvm-vpc}]"
   VPC_ID="$(aws ec2 describe-vpcs \
     --region "${REGION}" \
     --filters ${TAG_FILTER} \
@@ -138,7 +138,7 @@ for i in 0 1; do
   CIDR="10.42.${i}.0/24"
   SN="$(aws ec2 describe-subnets \
     --region "${REGION}" \
-    --filters "Name=vpc-id,Values=${VPC_ID}" "Name=availability-zone,Values=${AZ}" \
+    --filters "Name=vpc-id,Values=${VPC_ID}" "Name=availability-zone,Values=${AZ}" "${TAG_FILTER}" \
     --query 'Subnets[0].SubnetId' \
     --output text 2>/dev/null || echo "None")"
   if [[ "${SN}" == "None" || -z "${SN}" ]]; then
@@ -148,10 +148,10 @@ for i in 0 1; do
         --vpc-id "${VPC_ID}" \
         --cidr-block "${CIDR}" \
         --availability-zone "${AZ}" \
-        --tag-specifications "ResourceType=subnet,Tags=[{${TAG_KV}}]"
+        --tag-specifications "ResourceType=subnet,Tags=[{${TAG_KV}},{Key=Name,Value=microvm-subnet-${AZ}}]"
     SN="$(aws ec2 describe-subnets \
       --region "${REGION}" \
-      --filters "Name=vpc-id,Values=${VPC_ID}" "Name=availability-zone,Values=${AZ}" \
+      --filters "Name=vpc-id,Values=${VPC_ID}" "Name=availability-zone,Values=${AZ}" "${TAG_FILTER}" \
       --query 'Subnets[0].SubnetId' \
       --output text)"
   fi
@@ -172,22 +172,23 @@ if [[ "${SG_ID}" == "None" || -z "${SG_ID}" ]]; then
       --vpc-id "${VPC_ID}" \
       --group-name "microvm-efs-sg" \
       --description "microvm EFS NFS ingress" \
-      --tag-specifications "ResourceType=security-group,Tags=[{${TAG_KV}}]"
+      --tag-specifications "ResourceType=security-group,Tags=[{${TAG_KV}},{Key=Name,Value=microvm-efs-sg}]"
   SG_ID="$(aws ec2 describe-security-groups \
     --region "${REGION}" \
     --filters "Name=vpc-id,Values=${VPC_ID}" "Name=group-name,Values=microvm-efs-sg" \
     --query 'SecurityGroups[0].GroupId' \
     --output text)"
-  confirm_run "Allows NFS (TCP 2049) from within the VPC CIDR (${VPC_CIDR}) so mount targets are reachable." \
-    aws ec2 authorize-security-group-ingress \
-      --region "${REGION}" \
-      --group-id "${SG_ID}" \
-      --protocol tcp \
-      --port 2049 \
-      --cidr "${VPC_CIDR}"
 else
   ok "Reusing existing security group."
 fi
+info "Ensuring NFS (TCP 2049) ingress from ${VPC_CIDR} is present (idempotent)."
+aws ec2 authorize-security-group-ingress \
+  --region "${REGION}" \
+  --group-id "${SG_ID}" \
+  --protocol tcp \
+  --port 2049 \
+  --cidr "${VPC_CIDR}" \
+  2>&1 | grep -v "InvalidPermission.Duplicate" || true
 ok "SG: ${SG_ID}"
 
 step "EFS filesystem"

@@ -502,7 +502,7 @@ if [[ "${ROLE_EXISTS}" -eq 1 ]]; then
   MANAGED_ARN="arn:aws:iam::aws:policy/CloudWatchLogsFullAccess"
   if aws iam list-attached-role-policies --role-name "${ROLE_NAME}" \
         --query "AttachedPolicies[?PolicyArn=='${MANAGED_ARN}'] | [0].PolicyArn" \
-        --output text 2>/dev/null | grep -q "${MANAGED_ARN}"; then
+        --output text 2>/dev/null | grep -Fxq "${MANAGED_ARN}"; then
     confirm_run "Detaches CloudWatchLogsFullAccess from ${ROLE_NAME}." \
       aws iam detach-role-policy \
         --role-name "${ROLE_NAME}" \
@@ -542,11 +542,31 @@ fi
 
 step "Delete ECR repository"
 if [[ "${REPO_EXISTS}" -eq 1 ]]; then
-  confirm_run "Deletes ECR repository ${REPO_NAME} and all images it contains." \
-    aws ecr delete-repository \
+  # Tag re-check: REPO_NAME defaults to "microvm-shell" which could collide with
+  # an unrelated repo on a shared account. Only delete if we tagged it ourselves
+  # in setup.sh (microvm=managed).
+  REPO_ARN="$(aws ecr describe-repositories \
+    --region "${REGION}" \
+    --repository-names "${REPO_NAME}" \
+    --query 'repositories[0].repositoryArn' \
+    --output text 2>/dev/null || echo "")"
+  REPO_TAGS=""
+  if [[ -n "${REPO_ARN}" && "${REPO_ARN}" != "None" ]]; then
+    REPO_TAGS="$(aws ecr list-tags-for-resource \
+      --resource-arn "${REPO_ARN}" \
       --region "${REGION}" \
-      --repository-name "${REPO_NAME}" \
-      --force || warn "delete failed (continuing)"
+      --query "Tags[?Key=='microvm'].Value | [0]" \
+      --output text 2>/dev/null || echo "")"
+  fi
+  if [[ "${REPO_TAGS}" == "managed" ]]; then
+    confirm_run "Deletes ECR repository ${REPO_NAME} and all images it contains." \
+      aws ecr delete-repository \
+        --region "${REGION}" \
+        --repository-name "${REPO_NAME}" \
+        --force || warn "delete failed (continuing)"
+  else
+    warn "ECR repo ${REPO_NAME} exists but isn't tagged microvm=managed — refusing to delete; tag it manually or delete it yourself."
+  fi
 else
   info "Repository ${REPO_NAME} not found, skipping."
 fi

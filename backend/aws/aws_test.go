@@ -411,6 +411,33 @@ func TestLoginRejectsEfsWithoutAccessPoint(t *testing.T) {
 	assert.Contains(t, err.Error(), "--efs-access-point-arn")
 }
 
+func TestLoginPersistsTieredMode(t *testing.T) {
+	t.Setenv("MICROVM_HOME", t.TempDir())
+	cfg := &config.Config{DefaultProvider: "aws"}
+	b := awsbackend.New(cfg, &fakeInvoker{}, fakeControl{}, fakeIdentity{})
+	err := b.Login(context.Background(), backend.LoginOpts{
+		RuntimeArn:            "arn:aws:bedrock-agentcore:us-east-1:123:runtime/microvm-shell",
+		SnapshotMode:          "tiered",
+		S3FilesAccessPointArn: "arn:aws:s3:us-east-1:123:accesspoint/microvm-files",
+		S3FilesBucket:         "microvm-workspace-123",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "tiered", cfg.AWS.SnapshotMode)
+}
+
+func TestLoginRejectsTieredWithoutAccessPoint(t *testing.T) {
+	t.Setenv("MICROVM_HOME", t.TempDir())
+	cfg := &config.Config{DefaultProvider: "aws"}
+	b := awsbackend.New(cfg, &fakeInvoker{}, fakeControl{}, fakeIdentity{})
+	err := b.Login(context.Background(), backend.LoginOpts{
+		RuntimeArn:    "arn:aws:bedrock-agentcore:us-east-1:123:runtime/microvm-shell",
+		SnapshotMode:  "tiered",
+		S3FilesBucket: "b",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--s3-files-access-point-arn")
+}
+
 func TestLoginRejectsUnknownMode(t *testing.T) {
 	t.Setenv("MICROVM_HOME", t.TempDir())
 	cfg := &config.Config{DefaultProvider: "aws"}

@@ -43,5 +43,8 @@ Subsequent invocations re-validate the runtime is still reachable.`,
 	cmd.Flags().StringVar(&opts.SnapshotBucket, "snapshot-bucket", "", "S3 bucket for snapshot storage (required if --snapshot-mode is s3 or tiered)")
 	cmd.Flags().StringVar(&opts.EFSAccessPointArn, "efs-access-point-arn", "", "EFS access point ARN (required when --snapshot-mode is efs)")
 	cmd.Flags().StringVar(&opts.EFSMountPath, "efs-mount-path", "", "EFS mount path inside the runtime (default: /mnt/efs)")
+	cmd.Flags().StringVar(&opts.S3FilesAccessPointArn, "s3-files-access-point-arn", "", "S3 access point ARN for S3 Files mount (required when --snapshot-mode is tiered)")
+	cmd.Flags().StringVar(&opts.S3FilesBucket, "s3-files-bucket", "", "S3 bucket backing the access point (required when --snapshot-mode is tiered)")
+	cmd.Flags().StringVar(&opts.S3FilesMountPath, "s3-files-mount-path", "", "S3 Files mount path inside the runtime (default: /workspace)")
 	return cmd
 }

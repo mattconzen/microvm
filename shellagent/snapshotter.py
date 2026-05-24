@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tarfile
@@ -19,6 +20,19 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 WORKSPACE = "/workspace"
+
+# Restrict snapshot/sandbox identifiers to characters that can't escape a
+# directory join. This blocks "..", "/", and other path-traversal payloads
+# coming in via the snapshot envelope before we os.path.join() them under
+# the EFS mount.
+_VALID_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _safe_id(label: str, value: str) -> None:
+    if not value:
+        raise ValueError(f"{label} required")
+    if not _VALID_ID_RE.match(value):
+        raise ValueError(f"{label} {value!r} invalid: must match {_VALID_ID_RE.pattern}")
 
 
 class Snapshotter(ABC):
@@ -153,8 +167,11 @@ class EfsSnapshotter(Snapshotter):
 
     def snapshot(self, snap_id: str, name: str, sandbox_id: str = "") -> dict[str, Any]:
         alias = os.environ.get("BEDROCK_AGENTCORE_SESSION_ID", "")
-        if not sandbox_id:
-            return {"alias": alias, "name": name, "locator": "", "error": "efs snapshot: sandbox_id required"}
+        try:
+            _safe_id("sandbox_id", sandbox_id)
+            _safe_id("snap_id", snap_id)
+        except ValueError as e:
+            return {"alias": alias, "name": name, "locator": "", "error": f"efs snapshot: {e}"}
         src = self._session_dir(sandbox_id)
         if not os.path.isdir(src):
             # First-ever snapshot of a fresh sandbox — nothing on disk yet.
@@ -170,10 +187,21 @@ class EfsSnapshotter(Snapshotter):
         except subprocess.CalledProcessError as e:
             shutil.rmtree(tmp, ignore_errors=True)
             return {"alias": alias, "name": name, "locator": "", "error": f"efs snapshot: rsync failed: {e.stderr or e}"}
-        # Atomic publish.
+        # Atomic publish: keep a tree at `final` for the entire window so
+        # concurrent resumers never observe a missing snapshot path. Move
+        # the existing tree aside, swap in the new one, then drop the old.
+        old_final = final + ".old"
         if os.path.exists(final):
-            shutil.rmtree(final, ignore_errors=True)
-        os.rename(tmp, final)
+            os.rename(final, old_final)
+        try:
+            os.rename(tmp, final)
+        except OSError:
+            # Roll back if publish fails.
+            if os.path.exists(old_final):
+                os.rename(old_final, final)
+            raise
+        if os.path.exists(old_final):
+            shutil.rmtree(old_final, ignore_errors=True)
         locator = json.dumps({"efs_path": final})
         return {"alias": alias, "name": name, "locator": locator}
 
@@ -181,8 +209,10 @@ class EfsSnapshotter(Snapshotter):
         out = alias or os.environ.get("BEDROCK_AGENTCORE_SESSION_ID", "")
         if not locator:
             return {"alias": out, "error": "efs resume: empty locator"}
-        if not sandbox_id:
-            return {"alias": out, "error": "efs resume: sandbox_id required"}
+        try:
+            _safe_id("sandbox_id", sandbox_id)
+        except ValueError as e:
+            return {"alias": out, "error": f"efs resume: {e}"}
         try:
             info = json.loads(locator)
         except (ValueError, json.JSONDecodeError) as e:

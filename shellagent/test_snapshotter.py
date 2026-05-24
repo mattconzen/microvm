@@ -136,6 +136,12 @@ def test_make_snapshotter_s3_requires_bucket(monkeypatch):
         sn.make_snapshotter()
 
 
+import shutil as _shutil
+_HAS_RSYNC = _shutil.which("rsync") is not None
+_skip_if_no_rsync = pytest.mark.skipif(not _HAS_RSYNC, reason="rsync not installed")
+
+
+@_skip_if_no_rsync
 def test_efs_snapshotter_roundtrips_workspace(tmp_path):
     # We fake out the rsync subprocess to operate on local paths so the test
     # runs without an actual EFS mount.
@@ -158,6 +164,7 @@ def test_efs_snapshotter_roundtrips_workspace(tmp_path):
     assert not (mount / ".tmp" / "snp_xyz").exists()
 
 
+@_skip_if_no_rsync
 def test_efs_snapshotter_resume_into_new_session(tmp_path):
     mount = tmp_path / "efs"
     snap_dir = mount / "snapshots" / "snp_xyz"
@@ -188,6 +195,27 @@ def test_efs_snapshot_requires_sandbox_id(tmp_path):
     s = sn.EfsSnapshotter(mount=str(tmp_path))
     out = s.snapshot("snp_x", "n", sandbox_id="")
     assert "sandbox_id required" in out["error"]
+
+
+def test_efs_snapshot_rejects_traversal_sandbox_id(tmp_path):
+    s = sn.EfsSnapshotter(mount=str(tmp_path))
+    out = s.snapshot("snp_x", "n", sandbox_id="../etc")
+    assert "invalid" in out["error"]
+    assert out["locator"] == ""
+
+
+def test_efs_snapshot_rejects_traversal_snap_id(tmp_path):
+    s = sn.EfsSnapshotter(mount=str(tmp_path))
+    out = s.snapshot("../../etc", "n", sandbox_id="mvm_ok")
+    assert "invalid" in out["error"]
+    assert out["locator"] == ""
+
+
+def test_efs_resume_rejects_traversal_sandbox_id(tmp_path):
+    s = sn.EfsSnapshotter(mount=str(tmp_path))
+    locator = json.dumps({"efs_path": str(tmp_path / "snapshots" / "snp_x")})
+    out = s.resume(locator, "sess-1", sandbox_id="../etc")
+    assert "invalid" in out["error"]
 
 
 def test_efs_partial_snapshot_is_cleaned_up(tmp_path, monkeypatch):

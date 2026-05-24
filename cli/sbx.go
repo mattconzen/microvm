@@ -22,6 +22,7 @@ func newSbxCmd(ctx context.Context, app *App, g *GlobalFlags) *cobra.Command {
 		newSnapshotCmd(ctx, app, g),
 		newSnapshotsCmd(ctx, app, g),
 		newResumeCmd(ctx, app, g),
+		newForkCmd(ctx, app, g),
 		newTerminateCmd(ctx, app, g),
 		newCheckpointCmd(ctx, app, g),
 	)

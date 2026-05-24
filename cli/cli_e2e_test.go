@@ -251,6 +251,26 @@ func TestE2EResumeRejectsModeMismatch(t *testing.T) {
 	assert.Contains(t, combined, "does not match active runtime mode")
 }
 
+func TestE2EFork(t *testing.T) {
+	env := newTestEnv(t)
+	env.fake.snapshotMode = "s3" // any non-none mode exercises the locator round-trip
+
+	src := createSandbox(t, env.app, "src-sbx")
+	forkOut := runCLIJSON(t, env.app, "sbx", "fork", src.ID, "--name", "forked")
+	var forked state.Sandbox
+	require.NoError(t, json.Unmarshal([]byte(forkOut), &forked))
+	assert.NotEqual(t, src.ID, forked.ID, "fork mints a new sandbox id")
+	assert.Equal(t, "forked", forked.Name)
+	assert.Equal(t, src.ID, forked.Labels["forked_from"])
+	assert.NotEmpty(t, forked.Labels["via_snapshot"])
+
+	// The intermediate snapshot is visible in state.
+	snap, err := env.store.GetSnapshot(forked.Labels["via_snapshot"])
+	require.NoError(t, err)
+	assert.Equal(t, src.ID, snap.SandboxID)
+	assert.Equal(t, "s3", snap.Mode)
+}
+
 func TestE2ECopyRoundTrip(t *testing.T) {
 	env := newTestEnv(t)
 	sb := createSandbox(t, env.app, "copyme")

@@ -39,6 +39,12 @@ is lost. Use sbx fork instead if you want to keep the current state too.`,
 			// (The mode-mismatch check in the backend covers the harder case
 			// of cross-runtime snapshots; this is just a per-sandbox sanity
 			// check.)
+			if snap.SandboxID == "" {
+				return fmt.Errorf(
+					"snapshot %s predates sandbox-id tracking; refusing revert (the safe restore semantics require a known source sandbox)",
+					snap.ID,
+				)
+			}
 			if snap.SandboxID != sb.ID {
 				return fmt.Errorf(
 					"snapshot %s is of sandbox %s, not %s; refusing cross-sandbox revert",

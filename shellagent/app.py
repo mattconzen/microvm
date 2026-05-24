@@ -4,8 +4,8 @@ Envelopes (unary HTTP path, POST /invocations):
     {"op": "exec",      "cmd": ["sh", "-lc", "..."]}
     {"op": "put",       "path": "/tmp/x", "b64": "..."}
     {"op": "get",       "path": "/tmp/x"}
-    {"op": "snapshot",  "snap_id": "snp_...", "name": "demo", "mode": "s3"}
-    {"op": "resume",    "alias": "sess-1", "locator": "{...}", "mode": "s3"}
+    {"op": "snapshot",  "snap_id": "snp_...", "name": "demo", "mode": "s3", "sandbox_id": "mvm_..."}
+    {"op": "resume",    "alias": "sess-1", "locator": "{...}", "mode": "s3", "sandbox_id": "mvm_..."}
     {"op": "terminate"}
 
 The interactive shell runs over the WebSocket path (`/ws`) instead of the
@@ -223,15 +223,21 @@ def handle_snapshot(req: dict) -> dict:
     # both, we stamp a deterministic placeholder so an alias-only response is
     # still well-formed.
     snap_id = req.get("snap_id") or name or "snap"
+    sandbox_id = req.get("sandbox_id", "")
     try:
-        return _get_snapshotter().snapshot(snap_id, name)
+        return _get_snapshotter().snapshot(snap_id, name, sandbox_id=sandbox_id)
     except Exception as e:  # noqa: BLE001 — surface any backend error to the caller
         return {"alias": "", "name": name, "locator": "", "error": str(e)}
 
 
 def handle_resume(req: dict) -> dict:
+    sandbox_id = req.get("sandbox_id", "")
     try:
-        return _get_snapshotter().resume(req.get("locator", ""), req.get("alias", ""))
+        return _get_snapshotter().resume(
+            req.get("locator", ""),
+            req.get("alias", ""),
+            sandbox_id=sandbox_id,
+        )
     except Exception as e:  # noqa: BLE001
         return {"alias": "", "error": str(e)}
 

@@ -125,6 +125,12 @@ func (f *fakeBackend) Snapshot(_ context.Context, sb backend.Sandbox, spec backe
 	case "s3":
 		kind = mode
 		locator = fmt.Sprintf(`{"s3_uri":"fake://s3/%s"}`, spec.ID)
+	case "tiered":
+		kind = "tiered"
+		locator = fmt.Sprintf(
+			`{"workspace_prefix":"s3://fake/sessions/%s/","snapshot_prefix":"s3://fake/snapshots/%s/"}`,
+			sb.ID, spec.ID,
+		)
 	default:
 		// none mode: kind stays "alias" and locator stays empty.
 	}

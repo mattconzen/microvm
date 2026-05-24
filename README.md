@@ -21,7 +21,7 @@ Pick a snapshot backend at runtime registration:
 ```sh
 microvm login --snapshot-mode s3 --snapshot-bucket my-bucket
 microvm login --snapshot-mode efs --efs-access-point-arn arn:aws:elasticfilesystem:us-east-1:123:access-point/fsap-...
-microvm login --snapshot-mode tiered --snapshot-bucket b   # PR3 (in progress)
+microvm login --snapshot-mode tiered --s3-files-access-point-arn arn:aws:s3:us-east-1:123:accesspoint/ap-... --s3-files-bucket my-bucket
 ```
 
 Modes:
@@ -33,7 +33,12 @@ Modes:
 - `efs` — EFS-backed snapshots via `rsync` on a shared access point.
   Requires VPC-mode runtime (set up via `scripts/setup_efs.sh`).
   Requires `--efs-access-point-arn`.
-- `tiered` — fast session-local tier + async S3 durability. (PR3 — in progress)
+- `tiered` — two-tier durable storage: a fast POSIX cache tier
+  (`/var/microvm/cache/<sandbox_id>/`, AgentCore-managed) plus a snapshottable
+  S3 Files tier (`/workspace/<sandbox_id>/`). Snapshots are server-side S3
+  prefix copies; use `microvm sbx checkpoint <id>` to promote cache artifacts
+  into the workspace before snapshotting. Requires `--s3-files-access-point-arn`
+  and `--s3-files-bucket`.
 
 Mode is a property of the AgentCore runtime, not the sandbox: every sandbox
 under a runtime uses the same snapshot mode. Resuming a snapshot taken under
@@ -54,6 +59,32 @@ EFS mount at `/mnt/efs`. It prints the `microvm login` invocation to run.
 
 (The runtime name uses underscores because AgentCore's name regex
 forbids hyphens.)
+
+### Tiered setup
+
+Provision tiered mode once per environment:
+
+    bash scripts/setup_tiered.sh
+
+The script provisions a VPC (or reuses the EFS one), an S3 bucket, an S3
+Files filesystem + access point, a VPC gateway endpoint for S3, IAM
+permissions, and a new AgentCore runtime named `microvm_shell_tiered`
+configured for VPC mode with the S3 Files mount at `/workspace`. It prints
+the `microvm login` invocation to run.
+
+### Working with the cache tier (tiered mode)
+
+In tiered mode, two paths are visible inside the sandbox:
+
+- `/workspace/<sandbox_id>/` (default cwd for `microvm sbx exec`) — durable,
+  snapshotted. S3-backed, so no rename, no random writes, no SQLite-WAL.
+- `/var/microvm/cache/<sandbox_id>/` — fast POSIX scratch. AgentCore-managed,
+  preserved for the session lifetime, lost on eviction.
+
+Tools that need real POSIX (`git`, `npm install`, `pip install`, SQLite) run
+faster from the cache. To include cache artifacts in the next snapshot, place
+them under `cache/<sandbox_id>/promote/` and run `microvm sbx checkpoint <id>`
+to rsync them into the workspace.
 
 ### Teardown
 

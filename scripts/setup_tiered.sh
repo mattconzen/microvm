@@ -508,6 +508,22 @@ else
   # AgentCore docs (runtime-filesystem-configurations) before running.
   FS_JSON="$(jq -n --arg ap "${RUNTIME_AP_ARN}" \
     '[{s3FilesAccessPoint: {accessPointArn: $ap, mountPath: "/workspace"}}]')"
+  # Env vars baked into the runtime so the shellagent's make_snapshotter()
+  # selects the tiered snapshotter instead of falling back to alias mode.
+  # Mirrors backend/aws/snapshot_tiered.go's EnvOverrides().
+  # TODO: verify the exact AgentCore CLI flag name on first real run --
+  # the AWS CLI standard for create-agent-runtime is --environment-variables
+  # taking a JSON object, but AgentCore may use --environment or a nested
+  # shape under --agent-runtime-artifact. Adjust here if the create call
+  # rejects the flag.
+  ENV_JSON="$(jq -n \
+    --arg bucket "${BUCKET}" \
+    '{
+      MICROVM_SNAPSHOT_MODE: "tiered",
+      MICROVM_S3FILES_BUCKET: $bucket,
+      MICROVM_S3FILES_MOUNT_PATH: "/workspace",
+      MICROVM_CACHE_ROOT: "/var/microvm/cache"
+    }')"
   confirm_run "Creates a VPC-mode AgentCore runtime that mounts the S3 Files access point at /workspace." \
     aws bedrock-agentcore-control create-agent-runtime \
       --region "${REGION}" \
@@ -515,6 +531,7 @@ else
       --agent-runtime-artifact "${ARTIFACT_JSON}" \
       --network-configuration "${NETWORK_JSON}" \
       --filesystem-configurations "${FS_JSON}" \
+      --environment-variables "${ENV_JSON}" \
       --role-arn "${ROLE_ARN}"
   RUNTIME_ARN="$(aws bedrock-agentcore-control list-agent-runtimes \
     --region "${REGION}" \

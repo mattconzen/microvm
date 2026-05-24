@@ -111,11 +111,17 @@ func (f *fakeBackend) Snapshot(_ context.Context, sb backend.Sandbox, spec backe
 	}
 	kind := "alias"
 	locator := ""
-	if mode != "none" {
+	// Fake locator schema is mode-specific but opaque to shared code; the
+	// only requirement is it round-trips through state and back to Resume.
+	switch mode {
+	case "efs":
 		kind = mode
-		// Fake locator schema is mode-specific but opaque to shared code; the
-		// only requirement is it round-trips through state and back to Resume.
-		locator = fmt.Sprintf(`{"%s_uri":"fake://%s/%s"}`, mode, mode, spec.ID)
+		locator = fmt.Sprintf(`{"efs_path":"/mnt/efs/snapshots/%s"}`, spec.ID)
+	case "s3":
+		kind = mode
+		locator = fmt.Sprintf(`{"s3_uri":"fake://s3/%s"}`, spec.ID)
+	default:
+		// none mode: kind stays "alias" and locator stays empty.
 	}
 	f.mu.Lock()
 	f.snapshots = append(f.snapshots, snapshotCall{SessionID: sb.SessionID, Spec: spec, Mode: mode})

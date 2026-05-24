@@ -48,6 +48,33 @@ def _get_snapshotter() -> Snapshotter:
 SHELL_READ_CHUNK = 30 * 1024
 
 
+def _resolve_cwd(req: dict) -> str | None:
+    """Pick a default working directory for exec in tiered mode.
+
+    Returns `<MICROVM_S3FILES_MOUNT_PATH>/<sandbox_id>` (creating it on demand)
+    when mode is tiered and the sandbox_id passes `_safe_id`. Otherwise returns
+    None so the subprocess inherits the agent's cwd (preserving today's
+    behavior). A failure to create the directory also falls back to None so a
+    broken mount never breaks routine command execution.
+    """
+    if os.environ.get("MICROVM_SNAPSHOT_MODE", "") != "tiered":
+        return None
+    sandbox_id = req.get("sandbox_id", "")
+    if not sandbox_id:
+        return None
+    try:
+        _safe_id("sandbox_id", sandbox_id)
+    except ValueError:
+        return None
+    workspace = os.environ.get("MICROVM_S3FILES_MOUNT_PATH", "/workspace")
+    cwd = os.path.join(workspace, sandbox_id)
+    try:
+        os.makedirs(cwd, exist_ok=True)
+    except OSError:
+        return None
+    return cwd
+
+
 def handle_exec(req: dict) -> dict:
     cmd = req.get("cmd") or []
     if not cmd:
@@ -58,6 +85,7 @@ def handle_exec(req: dict) -> dict:
             capture_output=True,
             text=True,
             timeout=req.get("timeout_sec", 300),
+            cwd=_resolve_cwd(req),
         )
         return {
             "stdout": proc.stdout,

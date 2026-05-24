@@ -224,3 +224,25 @@ def test_shell_session_callable_exists():
     import inspect
 
     assert inspect.iscoroutinefunction(app.shell_session)
+
+
+def test_exec_default_cwd_is_workspace_in_tiered_mode(tmp_path, monkeypatch):
+    monkeypatch.setenv("MICROVM_SNAPSHOT_MODE", "tiered")
+    monkeypatch.setenv("MICROVM_S3FILES_MOUNT_PATH", str(tmp_path / "workspace"))
+    out = app.handle_exec({"cmd": ["pwd"], "sandbox_id": "mvm_a"})
+    assert out["exit"] == 0
+    assert out["stdout"].strip() == str(tmp_path / "workspace" / "mvm_a")
+
+
+def test_exec_inherits_cwd_in_non_tiered_mode(monkeypatch):
+    monkeypatch.delenv("MICROVM_SNAPSHOT_MODE", raising=False)
+    out = app.handle_exec({"cmd": ["pwd"], "sandbox_id": "mvm_a"})
+    assert out["exit"] == 0
+    assert "/workspace/" not in out["stdout"]
+
+
+def test_exec_tiered_without_sandbox_id_inherits(monkeypatch):
+    monkeypatch.setenv("MICROVM_SNAPSHOT_MODE", "tiered")
+    out = app.handle_exec({"cmd": ["pwd"]})
+    assert out["exit"] == 0
+    assert "/workspace/" not in out["stdout"]

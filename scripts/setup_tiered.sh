@@ -298,26 +298,30 @@ if [[ "${S3FILES_FS_ID}" == "None" || -z "${S3FILES_FS_ID}" ]]; then
 else
   ok "Reusing existing S3 Files filesystem."
 fi
+if [[ -z "${S3FILES_FS_ID}" || "${S3FILES_FS_ID}" == "None" ]]; then
+  warn "S3 Files filesystem ID could not be resolved. Aborting."
+  warn "This may be because the 'aws s3files' API surface has changed since this script was written."
+  exit 1
+fi
 ok "S3 Files filesystem: ${S3FILES_FS_ID}"
 
 # TODO: confirm the association command name. Plan suggests
 #       `aws s3files associate --filesystem-id ... --access-point-arn ...`.
 info "Associating the access point with the S3 Files filesystem (idempotent best-effort)."
-if [[ -n "${S3FILES_FS_ID}" && "${S3FILES_FS_ID}" != "None" ]]; then
-  ASSOC_EXISTS="$(aws s3files list-associations \
-    --region "${REGION}" \
-    --filesystem-id "${S3FILES_FS_ID}" \
-    --query "associations[?accessPointArn=='${AP_ARN}'] | [0].associationId" \
-    --output text 2>/dev/null || echo "None")"
-  if [[ "${ASSOC_EXISTS}" == "None" || -z "${ASSOC_EXISTS}" ]]; then
-    confirm_run "Associates the access point with the S3 Files filesystem." \
-      aws s3files associate \
-        --region "${REGION}" \
-        --filesystem-id "${S3FILES_FS_ID}" \
-        --access-point-arn "${AP_ARN}"
-  else
-    ok "Association already exists (${ASSOC_EXISTS})."
-  fi
+# S3FILES_FS_ID is guaranteed non-empty here (asserted above).
+ASSOC_EXISTS="$(aws s3files list-associations \
+  --region "${REGION}" \
+  --filesystem-id "${S3FILES_FS_ID}" \
+  --query "associations[?accessPointArn=='${AP_ARN}'] | [0].associationId" \
+  --output text 2>/dev/null || echo "None")"
+if [[ "${ASSOC_EXISTS}" == "None" || -z "${ASSOC_EXISTS}" ]]; then
+  confirm_run "Associates the access point with the S3 Files filesystem." \
+    aws s3files associate \
+      --region "${REGION}" \
+      --filesystem-id "${S3FILES_FS_ID}" \
+      --access-point-arn "${AP_ARN}"
+else
+  ok "Association already exists (${ASSOC_EXISTS})."
 fi
 
 # AgentCore expects the access point ARN for filesystemConfigurations; we
@@ -327,11 +331,11 @@ fi
 RUNTIME_AP_ARN="${AP_ARN}"
 
 step "VPC gateway endpoint for S3 (free; avoids NAT egress)"
-# Find the main route table for the VPC. If the user customized routing,
-# this picks the first associated table -- adjust as needed for your setup.
+# Find the main route table for the VPC explicitly via association.main=true
+# so we don't accidentally attach the endpoint to a custom/NAT table.
 RTB_ID="$(aws ec2 describe-route-tables \
   --region "${REGION}" \
-  --filters "Name=vpc-id,Values=${VPC_ID}" \
+  --filters "Name=vpc-id,Values=${VPC_ID}" "Name=association.main,Values=true" \
   --query 'RouteTables[0].RouteTableId' \
   --output text 2>/dev/null || echo "None")"
 if [[ "${RTB_ID}" == "None" || -z "${RTB_ID}" ]]; then
@@ -374,12 +378,13 @@ ROLE_ARN="$(aws iam get-role --role-name "${ROLE_NAME}" --query 'Role.Arn' --out
 # TODO at implementation time: confirm the exact ARN format. The PR3 plan
 # expects `s3files:ClientMount`/`s3files:ClientWrite` on the filesystem ARN;
 # adjust this format string if the real API uses a different shape.
-if [[ -n "${S3FILES_FS_ID}" && "${S3FILES_FS_ID}" != "None" ]]; then
-  S3FILES_FS_ARN="arn:aws:s3files:${REGION}:${ACCOUNT_ID}:filesystem/${S3FILES_FS_ID}"
-else
-  S3FILES_FS_ARN="arn:aws:s3files:${REGION}:${ACCOUNT_ID}:filesystem/*"
-fi
+# S3FILES_FS_ID is guaranteed non-empty here (asserted above).
+S3FILES_FS_ARN="arn:aws:s3files:${REGION}:${ACCOUNT_ID}:filesystem/${S3FILES_FS_ID}"
 
+# Note: s3files:ClientRootAccess mirrors the EFS pattern
+# (elasticfilesystem:ClientRootAccess in setup_efs.sh) since the workload
+# container runs as uid 0. If the real S3 Files API surface does not include
+# this action, drop it from the Action list on first run.
 TIERED_POLICY_DOC="$(mktemp)"
 cat >"${TIERED_POLICY_DOC}" <<EOF
 {
@@ -390,7 +395,8 @@ cat >"${TIERED_POLICY_DOC}" <<EOF
       "Effect": "Allow",
       "Action": [
         "s3files:ClientMount",
-        "s3files:ClientWrite"
+        "s3files:ClientWrite",
+        "s3files:ClientRootAccess"
       ],
       "Resource": "${S3FILES_FS_ARN}"
     },

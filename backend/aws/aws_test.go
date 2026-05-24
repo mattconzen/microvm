@@ -386,6 +386,31 @@ func TestLoginRejectsS3WithoutBucket(t *testing.T) {
 	assert.Contains(t, err.Error(), "--snapshot-bucket")
 }
 
+func TestLoginPersistsEfsMode(t *testing.T) {
+	t.Setenv("MICROVM_HOME", t.TempDir())
+	cfg := &config.Config{DefaultProvider: "aws"}
+	b := awsbackend.New(cfg, &fakeInvoker{}, fakeControl{}, fakeIdentity{})
+	err := b.Login(context.Background(), backend.LoginOpts{
+		RuntimeArn:        "arn:aws:bedrock-agentcore:us-east-1:123:runtime/microvm-shell",
+		SnapshotMode:      "efs",
+		EFSAccessPointArn: "arn:aws:elasticfilesystem:us-east-1:123:access-point/fsap-abc",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "efs", cfg.AWS.SnapshotMode)
+}
+
+func TestLoginRejectsEfsWithoutAccessPoint(t *testing.T) {
+	t.Setenv("MICROVM_HOME", t.TempDir())
+	cfg := &config.Config{DefaultProvider: "aws"}
+	b := awsbackend.New(cfg, &fakeInvoker{}, fakeControl{}, fakeIdentity{})
+	err := b.Login(context.Background(), backend.LoginOpts{
+		RuntimeArn:   "arn:aws:bedrock-agentcore:us-east-1:123:runtime/microvm-shell",
+		SnapshotMode: "efs",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--efs-access-point-arn")
+}
+
 func TestLoginRejectsUnknownMode(t *testing.T) {
 	t.Setenv("MICROVM_HOME", t.TempDir())
 	cfg := &config.Config{DefaultProvider: "aws"}

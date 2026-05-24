@@ -4,7 +4,8 @@ Strategy is chosen at process start from MICROVM_SNAPSHOT_MODE:
   none   -- alias-only (returns the AgentCore session id, no I/O)
   s3     -- tar+gzip /workspace -> s3://<bucket>/<prefix>/<id>.tar.gz
   efs    -- rsync between <mount>/sessions/<sb>/ and <mount>/snapshots/<snap>/
-  tiered -- TODO (PR3)
+  tiered -- server-side `aws s3 cp --recursive` between
+            s3://<bucket>/sessions/<sb>/ and s3://<bucket>/snapshots/<snap>/
 """
 
 from __future__ import annotations
@@ -239,6 +240,74 @@ class EfsSnapshotter(Snapshotter):
         )
 
 
+class TieredSnapshotter(Snapshotter):
+    """Server-side S3 prefix copy between sessions/<sb>/ and snapshots/<snap>/.
+
+    Both source and destination live in the same S3 bucket (the one backing
+    the S3 Files access point mounted at `mount`), so `aws s3 cp --recursive`
+    issues CopyObject calls server-side without streaming data through the
+    runtime. Mount path is informational here — the actual I/O is S3-to-S3.
+    """
+
+    mode = "tiered"
+
+    def __init__(self, bucket: str, mount: str = "/workspace"):
+        self.bucket = bucket
+        self.mount = mount
+
+    def _sessions_prefix(self, sandbox_id: str) -> str:
+        return f"s3://{self.bucket}/sessions/{sandbox_id}/"
+
+    def _snapshots_prefix(self, snap_id: str) -> str:
+        return f"s3://{self.bucket}/snapshots/{snap_id}/"
+
+    def snapshot(self, snap_id: str, name: str, sandbox_id: str = "") -> dict[str, Any]:
+        alias = os.environ.get("BEDROCK_AGENTCORE_SESSION_ID", "")
+        try:
+            _safe_id("sandbox_id", sandbox_id)
+            _safe_id("snap_id", snap_id)
+        except ValueError as e:
+            return {"alias": alias, "name": name, "locator": "", "error": f"tiered snapshot: {e}"}
+        src = self._sessions_prefix(sandbox_id)
+        dst = self._snapshots_prefix(snap_id)
+        try:
+            self._aws_cp_recursive(src, dst)
+        except subprocess.CalledProcessError as e:
+            return {"alias": alias, "name": name, "locator": "", "error": f"tiered snapshot: aws s3 cp failed: {e.stderr or e}"}
+        locator = json.dumps({"workspace_prefix": src, "snapshot_prefix": dst})
+        return {"alias": alias, "name": name, "locator": locator}
+
+    def resume(self, locator: str, alias: str, sandbox_id: str = "") -> dict[str, Any]:
+        out = alias or os.environ.get("BEDROCK_AGENTCORE_SESSION_ID", "")
+        if not locator:
+            return {"alias": out, "error": "tiered resume: empty locator"}
+        try:
+            _safe_id("sandbox_id", sandbox_id)
+        except ValueError as e:
+            return {"alias": out, "error": f"tiered resume: {e}"}
+        try:
+            info = json.loads(locator)
+        except (ValueError, json.JSONDecodeError) as e:
+            return {"alias": out, "error": f"tiered resume: bad locator: {e}"}
+        src = info.get("snapshot_prefix")
+        if not src:
+            return {"alias": out, "error": "tiered resume: locator missing snapshot_prefix"}
+        dst = self._sessions_prefix(sandbox_id)
+        try:
+            self._aws_cp_recursive(src, dst)
+        except subprocess.CalledProcessError as e:
+            return {"alias": out, "error": f"tiered resume: aws s3 cp failed: {e.stderr or e}"}
+        return {"alias": out}
+
+    # Shell out to the AWS CLI for server-side prefix copy. CopyObject runs
+    # in S3 with no data streaming through the runtime. Override in tests.
+    def _aws_cp_recursive(self, src: str, dst: str) -> None:
+        subprocess.run(
+            ["aws", "s3", "cp", "--recursive", src, dst],
+            check=True, capture_output=True, text=True,
+        )
+
+
 def make_snapshotter() -> Snapshotter:
     mode = os.environ.get("MICROVM_SNAPSHOT_MODE", "none") or "none"
     if mode == "none":
@@ -253,7 +322,9 @@ def make_snapshotter() -> Snapshotter:
         mount = os.environ.get("MICROVM_EFS_MOUNT_PATH", "/mnt/efs")
         return EfsSnapshotter(mount=mount)
     if mode == "tiered":
-        raise NotImplementedError(
-            "MICROVM_SNAPSHOT_MODE=tiered not yet implemented (PR3 — see docs/plans/2026-05-23-snapshot-modes-design.md)"
-        )
+        bucket = os.environ.get("MICROVM_S3FILES_BUCKET", "")
+        mount = os.environ.get("MICROVM_S3FILES_MOUNT_PATH", "/workspace")
+        if not bucket:
+            raise RuntimeError("MICROVM_SNAPSHOT_MODE=tiered requires MICROVM_S3FILES_BUCKET")
+        return TieredSnapshotter(bucket=bucket, mount=mount)
     raise RuntimeError(f"unknown MICROVM_SNAPSHOT_MODE: {mode!r}")

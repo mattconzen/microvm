@@ -40,6 +40,9 @@ type SandboxSpec struct {
 	CPUs     float64
 	MemoryMB int
 	FromSnap string
+	// ID is the new ID for the resumed sandbox. Optional for Create; required
+	// for Resume so the shellagent can resolve per-sandbox storage.
+	ID string
 }
 
 type SnapshotSpec struct {

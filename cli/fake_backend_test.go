@@ -148,6 +148,7 @@ func (f *fakeBackend) Resume(_ context.Context, snap backend.Snapshot, spec back
 		)
 	}
 	return backend.Sandbox{
+		ID:        spec.ID,
 		Provider:  f.name,
 		SessionID: snap.TargetSessionID,
 		Name:      spec.Name,

@@ -379,7 +379,11 @@ func (b *Backend) Resume(ctx context.Context, snap backend.Snapshot, spec backen
 	if err != nil {
 		return sb, err
 	}
-	body, err := b.invoke(ctx, backend.Sandbox{SessionID: snap.TargetSessionID}, req)
+	// Pass spec.ID so injectSandboxID stamps the new sandbox id onto the
+	// envelope — required by EFS resume to materialise into the right
+	// per-sandbox subdir. Empty (legacy callers) leaves the wire shape
+	// unchanged.
+	body, err := b.invoke(ctx, backend.Sandbox{ID: spec.ID, SessionID: snap.TargetSessionID}, req)
 	if err != nil {
 		return sb, err
 	}
@@ -395,6 +399,7 @@ func (b *Backend) Resume(ctx context.Context, snap backend.Snapshot, spec backen
 		sessionID = snap.TargetSessionID
 	}
 	return backend.Sandbox{
+		ID:        spec.ID,
 		Provider:  "aws",
 		SessionID: sessionID,
 		Name:      spec.Name,

@@ -240,6 +240,28 @@ func TestResumeFromAliasReusesSession(t *testing.T) {
 	assert.Equal(t, "sess-1", awssdk.ToString(fi.gotInput.RuntimeSessionId))
 }
 
+func TestResumeIncludesSandboxIDInEnvelope(t *testing.T) {
+	var captured awsbackend.Request
+	fi := &fakeInvoker{respond: func(req []byte) []byte {
+		_ = json.Unmarshal(req, &captured)
+		b, _ := json.Marshal(awsbackend.ResumeResponse{Alias: "sess-1"})
+		return b
+	}}
+	b, _ := newTestBackend(t, fi)
+	sb, err := b.Resume(context.Background(),
+		backend.Snapshot{Kind: "alias", TargetSessionID: "sess-1", Provider: "aws"},
+		backend.SandboxSpec{Name: "resumed", ID: "mvm_resumed"},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, awsbackend.OpResume, captured.Op)
+	// The minted sandbox id must reach the shellagent via the envelope so
+	// EFS resume can materialise into the right per-sandbox subdir.
+	assert.Equal(t, "mvm_resumed", captured.SandboxID)
+	// And the returned Sandbox should echo the id back so callers (e.g.
+	// the CLI persisting state) can read it without re-minting.
+	assert.Equal(t, "mvm_resumed", sb.ID)
+}
+
 func TestResumeRebindsToNewAlias(t *testing.T) {
 	fi := &fakeInvoker{respond: func(_ []byte) []byte {
 		b, _ := json.Marshal(awsbackend.ResumeResponse{Alias: "sess-2"})

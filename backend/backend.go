@@ -93,4 +93,8 @@ type Backend interface {
 	Snapshot(ctx context.Context, sb Sandbox, spec SnapshotSpec) (Snapshot, error)
 	Resume(ctx context.Context, snap Snapshot, spec SandboxSpec) (Sandbox, error)
 	Terminate(ctx context.Context, sb Sandbox) error
+	// Checkpoint promotes tier-1 cache content into the tier-2 workspace so
+	// the next Snapshot includes it. Tiered-mode only; other modes return an
+	// error.
+	Checkpoint(ctx context.Context, sb Sandbox) error
 }

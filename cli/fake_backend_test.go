@@ -21,12 +21,17 @@ type snapshotCall struct {
 	Mode      string
 }
 
+type checkpointCall struct {
+	SessionID string
+}
+
 type fakeBackend struct {
 	mu           sync.Mutex
 	name         string
 	files        map[string][]byte
 	execs        []execCall
 	snapshots    []snapshotCall
+	checkpoints  []checkpointCall
 	snapshotMode string // runtime mode the fake claims to have been registered with
 	execFn       func(sb backend.Sandbox, cmd []string, io backend.ExecIO) (int, error)
 	now          func() time.Time
@@ -164,5 +169,12 @@ func (f *fakeBackend) Resume(_ context.Context, snap backend.Snapshot, spec back
 }
 
 func (f *fakeBackend) Terminate(_ context.Context, _ backend.Sandbox) error {
+	return nil
+}
+
+func (f *fakeBackend) Checkpoint(_ context.Context, sb backend.Sandbox) error {
+	f.mu.Lock()
+	f.checkpoints = append(f.checkpoints, checkpointCall{SessionID: sb.SessionID})
+	f.mu.Unlock()
 	return nil
 }

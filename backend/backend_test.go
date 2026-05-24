@@ -37,7 +37,8 @@ func (s *stubBackend) Snapshot(context.Context, backend.Sandbox, backend.Snapsho
 func (s *stubBackend) Resume(context.Context, backend.Snapshot, backend.SandboxSpec) (backend.Sandbox, error) {
 	return backend.Sandbox{Provider: s.name}, nil
 }
-func (s *stubBackend) Terminate(context.Context, backend.Sandbox) error { return nil }
+func (s *stubBackend) Terminate(context.Context, backend.Sandbox) error  { return nil }
+func (s *stubBackend) Checkpoint(context.Context, backend.Sandbox) error { return nil }
 
 func TestRegistryRegisterAndGet(t *testing.T) {
 	cases := []struct {

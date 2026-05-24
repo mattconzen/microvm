@@ -42,7 +42,9 @@ func TestEfsProvisioner_RejectsInvalidArn(t *testing.T) {
 	cases := []string{
 		"not-an-arn",
 		"arn:aws:s3:::bucket", // wrong service
-		"arn:aws:elasticfilesystem:us-east-1:123:file-system/fs-abc", // FS ARN, not AP ARN
+		"arn:aws:elasticfilesystem:us-east-1:123:file-system/fs-abc",  // FS ARN, not AP ARN
+		"arn:aws:elasticfilesystem:us-east-1:123:access-point/fsap-",  // empty hex suffix
+		"arn:aws:elasticfilesystem:us-east-1:123:access-point/fsap-XYZ", // uppercase hex (fsap IDs are lowercase)
 	}
 	for _, a := range cases {
 		_, err := awsbackend.ProvisionerFor("efs", backend.LoginOpts{EFSAccessPointArn: a})

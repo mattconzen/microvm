@@ -2,10 +2,16 @@ package aws
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/mattconzen/microvm/backend"
 )
+
+// efsAccessPointResourceRe matches the resource portion of an EFS access point
+// ARN: "access-point/fsap-<hex>" where the hex suffix is non-empty and
+// lowercase (matching AWS-issued fsap IDs).
+var efsAccessPointResourceRe = regexp.MustCompile(`^access-point/fsap-[0-9a-f]+$`)
 
 const efsDefaultMountPath = "/mnt/efs"
 
@@ -59,9 +65,5 @@ func isValidEfsAccessPointArn(arn string) bool {
 	if parts[0] != "arn" || parts[1] != "aws" || parts[2] != "elasticfilesystem" {
 		return false
 	}
-	resource := parts[5]
-	if !strings.HasPrefix(resource, "access-point/fsap-") {
-		return false
-	}
-	return true
+	return efsAccessPointResourceRe.MatchString(parts[5])
 }

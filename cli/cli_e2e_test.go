@@ -251,6 +251,86 @@ func TestE2EResumeRejectsModeMismatch(t *testing.T) {
 	assert.Contains(t, combined, "does not match active runtime mode")
 }
 
+func TestE2EFork(t *testing.T) {
+	env := newTestEnv(t)
+	env.fake.snapshotMode = "s3" // any non-none mode exercises the locator round-trip
+
+	src := createSandbox(t, env.app, "src-sbx")
+	forkOut := runCLIJSON(t, env.app, "sbx", "fork", src.ID, "--name", "forked")
+	var forked state.Sandbox
+	require.NoError(t, json.Unmarshal([]byte(forkOut), &forked))
+	assert.NotEqual(t, src.ID, forked.ID, "fork mints a new sandbox id")
+	assert.Equal(t, "forked", forked.Name)
+	assert.Equal(t, src.ID, forked.Labels["forked_from"])
+	assert.NotEmpty(t, forked.Labels["via_snapshot"])
+
+	// The intermediate snapshot is visible in state.
+	snap, err := env.store.GetSnapshot(forked.Labels["via_snapshot"])
+	require.NoError(t, err)
+	assert.Equal(t, src.ID, snap.SandboxID)
+	assert.Equal(t, "s3", snap.Mode)
+}
+
+func TestE2ERevert(t *testing.T) {
+	env := newTestEnv(t)
+	env.fake.snapshotMode = "efs"
+
+	sb := createSandbox(t, env.app, "revertme")
+	snapOut := runCLIJSON(t, env.app, "sbx", "snapshot", sb.ID, "--name", "before")
+	var snap state.Snapshot
+	require.NoError(t, json.Unmarshal([]byte(snapOut), &snap))
+
+	stdout, _, err := runCLI(t, env.app, "sbx", "revert", sb.ID, "--snapshot", snap.ID)
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "reverted "+sb.ID+" to "+snap.ID)
+
+	after, err := env.store.GetSandbox(sb.ID)
+	require.NoError(t, err)
+	assert.Equal(t, sb.SessionID, after.SessionID, "revert preserves session id")
+	assert.Equal(t, snap.ID, after.Labels["reverted_to"])
+}
+
+func TestE2ERevertRejectsCrossSandbox(t *testing.T) {
+	env := newTestEnv(t)
+	env.fake.snapshotMode = "efs"
+
+	a := createSandbox(t, env.app, "a")
+	b := createSandbox(t, env.app, "b")
+	snapOut := runCLIJSON(t, env.app, "sbx", "snapshot", a.ID)
+	var snapA state.Snapshot
+	require.NoError(t, json.Unmarshal([]byte(snapOut), &snapA))
+
+	// Try to revert sandbox b to a snapshot of sandbox a.
+	_, stderr, err := runCLI(t, env.app, "sbx", "revert", b.ID, "--snapshot", snapA.ID)
+	require.Error(t, err)
+	assert.Contains(t, stderr+err.Error(), "cross-sandbox revert")
+}
+
+func TestE2ERevertRequiresSnapshotFlag(t *testing.T) {
+	env := newTestEnv(t)
+	sb := createSandbox(t, env.app, "rsbx")
+	_, _, err := runCLI(t, env.app, "sbx", "revert", sb.ID)
+	require.Error(t, err) // cobra rejects missing required flag
+}
+
+func TestE2ECreateFromSnapshot(t *testing.T) {
+	env := newTestEnv(t)
+	env.fake.snapshotMode = "tiered"
+
+	src := createSandbox(t, env.app, "src")
+	snapOut := runCLIJSON(t, env.app, "sbx", "snapshot", src.ID, "--name", "baseline")
+	var snap state.Snapshot
+	require.NoError(t, json.Unmarshal([]byte(snapOut), &snap))
+
+	forkedOut := runCLIJSON(t, env.app, "sbx", "create", "--name", "from-snap", "--from-snapshot", snap.ID)
+	var forked state.Sandbox
+	require.NoError(t, json.Unmarshal([]byte(forkedOut), &forked))
+	assert.NotEqual(t, src.ID, forked.ID, "minted a new sandbox id")
+	assert.Equal(t, "from-snap", forked.Name)
+	assert.Equal(t, snap.ID, forked.Labels["created_from"])
+	assert.Equal(t, "tiered", forked.Mode)
+}
+
 func TestE2ECopyRoundTrip(t *testing.T) {
 	env := newTestEnv(t)
 	sb := createSandbox(t, env.app, "copyme")

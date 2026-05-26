@@ -277,7 +277,7 @@ def test_tiered_snapshotter_resume_copies_back(monkeypatch):
     calls = []
 
     class FakeTiered(sn.TieredSnapshotter):
-        def _aws_cp_recursive(self, src, dst):
+        def _aws_sync_delete(self, src, dst):
             calls.append((src, dst))
 
     monkeypatch.setenv("BEDROCK_AGENTCORE_SESSION_ID", "sess-2")
@@ -289,6 +289,46 @@ def test_tiered_snapshotter_resume_copies_back(monkeypatch):
     out = s.resume(locator, "sess-2", sandbox_id="mvm_new")
     assert out["alias"] == "sess-2"
     assert calls == [("s3://microvm-fs/snapshots/snp_x/", "s3://microvm-fs/sessions/mvm_new/")]
+
+
+def test_tiered_resume_uses_sync_delete(monkeypatch):
+    calls = []
+
+    class FakeTiered(sn.TieredSnapshotter):
+        def _aws_sync_delete(self, src, dst):
+            calls.append(("sync", src, dst))
+
+        def _aws_cp_recursive(self, src, dst):
+            calls.append(("cp", src, dst))
+
+    monkeypatch.setenv("BEDROCK_AGENTCORE_SESSION_ID", "sess-1")
+    s = FakeTiered(bucket="microvm-fs", mount="/workspace")
+    locator = json.dumps({
+        "workspace_prefix": "s3://microvm-fs/sessions/mvm_old/",
+        "snapshot_prefix":  "s3://microvm-fs/snapshots/snp_x/",
+    })
+    out = s.resume(locator, "sess-1", sandbox_id="mvm_new")
+    assert out["alias"] == "sess-1"
+    # Snapshot path stays as cp (server-side copy from empty -> snapshot prefix);
+    # resume path uses sync --delete to mirror exactly.
+    assert calls == [("sync", "s3://microvm-fs/snapshots/snp_x/", "s3://microvm-fs/sessions/mvm_new/")]
+
+
+def test_tiered_snapshot_still_uses_cp(monkeypatch):
+    calls = []
+
+    class FakeTiered(sn.TieredSnapshotter):
+        def _aws_sync_delete(self, src, dst):
+            calls.append(("sync", src, dst))
+
+        def _aws_cp_recursive(self, src, dst):
+            calls.append(("cp", src, dst))
+
+    monkeypatch.setenv("BEDROCK_AGENTCORE_SESSION_ID", "sess-1")
+    s = FakeTiered(bucket="microvm-fs", mount="/workspace")
+    out = s.snapshot("snp_x", "n", sandbox_id="mvm_a")
+    # Snapshot creates a fresh prefix; cp is correct (no destination to mirror).
+    assert calls == [("cp", "s3://microvm-fs/sessions/mvm_a/", "s3://microvm-fs/snapshots/snp_x/")]
 
 
 def test_tiered_snapshot_requires_sandbox_id():

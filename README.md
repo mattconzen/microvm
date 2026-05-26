@@ -99,6 +99,28 @@ deletes resources tagged `microvm=managed` (or, for runtimes, the well-known
 names created by the setup scripts), so it will not touch anything you
 provisioned by hand.
 
+## Sandbox lifecycle
+
+The snapshot modes above are the durability layer. These verbs are the
+user-facing operations on top:
+
+| Verb | Effect |
+|------|--------|
+| `microvm sbx snapshot <id> [--name N]` | capture the workspace at a point in time |
+| `microvm sbx resume <snap-id> [--name N]` | create a new sandbox whose workspace starts as that snapshot |
+| `microvm sbx fork <id> [--name N]` | shorthand: snapshot + resume in one call |
+| `microvm sbx revert <id> --snapshot <snap-id>` | restore an existing sandbox's workspace in place (destructive) |
+| `microvm sbx create --from-snapshot <snap-id>` | create a new sandbox starting from a prior snapshot |
+| `microvm sbx checkpoint <id>` | (tiered mode) promote cache `promote/` artifacts into the snapshottable workspace |
+
+`fork` snapshots and resumes in one call, creating a new snapshot record
+along the way. `create --from-snapshot` reuses an existing snapshot id
+without creating a new one — use it when you already have a snapshot id
+in hand (from `sbx snapshots`) and just want a fresh sandbox seeded from it.
+
+`revert` overwrites the existing sandbox in place. Use `fork` if you
+want to keep the current state too.
+
 ## Layout
 
 - `cli/` — cobra commands (`sbx create`, `sbx exec`, `sbx cp`, `sbx snapshot`, etc.)

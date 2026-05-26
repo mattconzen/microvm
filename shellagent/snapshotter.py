@@ -294,9 +294,9 @@ class TieredSnapshotter(Snapshotter):
             return {"alias": out, "error": "tiered resume: locator missing snapshot_prefix"}
         dst = self._sessions_prefix(sandbox_id)
         try:
-            self._aws_cp_recursive(src, dst)
+            self._aws_sync_delete(src, dst)
         except subprocess.CalledProcessError as e:
-            return {"alias": out, "error": f"tiered resume: aws s3 cp failed: {e.stderr or e}"}
+            return {"alias": out, "error": f"tiered resume: aws s3 sync failed: {e.stderr or e}"}
         return {"alias": out}
 
     # Shell out to the AWS CLI for server-side prefix copy. CopyObject runs
@@ -304,6 +304,16 @@ class TieredSnapshotter(Snapshotter):
     def _aws_cp_recursive(self, src: str, dst: str) -> None:
         subprocess.run(
             ["aws", "s3", "cp", "--recursive", src, dst],
+            check=True, capture_output=True, text=True,
+        )
+
+    def _aws_sync_delete(self, src: str, dst: str) -> None:
+        # `aws s3 sync --delete` produces a mirror-exact copy of `src` at `dst`
+        # — stale objects under `dst` not present in `src` are deleted.
+        # Used for resume so a revert into an existing sandbox produces a clean
+        # replica instead of a merge.
+        subprocess.run(
+            ["aws", "s3", "sync", "--delete", src, dst],
             check=True, capture_output=True, text=True,
         )
 

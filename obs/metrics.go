@@ -15,6 +15,7 @@ const (
 	MetricCpBytes        = "microvm.cp.bytes"
 	MetricShellSession   = "microvm.shell.session_duration_ms"
 	MetricSnapshot       = "microvm.snapshot.duration_ms"
+	MetricCheckpoint     = "microvm.checkpoint.duration_ms"
 	MetricResume         = "microvm.resume.duration_ms"
 	MetricTerminate      = "microvm.terminate.duration_ms"
 	MetricLogin          = "microvm.login.duration_ms"

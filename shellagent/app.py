@@ -6,6 +6,7 @@ Envelopes (unary HTTP path, POST /invocations):
     {"op": "get",       "path": "/tmp/x"}
     {"op": "snapshot",  "snap_id": "snp_...", "name": "demo", "mode": "s3", "sandbox_id": "mvm_..."}
     {"op": "resume",    "alias": "sess-1", "locator": "{...}", "mode": "s3", "sandbox_id": "mvm_..."}
+    {"op": "checkpoint", "sandbox_id": "mvm_..."}
     {"op": "terminate"}
 
 The interactive shell runs over the WebSocket path (`/ws`) instead of the
@@ -28,7 +29,7 @@ try:
 except ImportError:  # pragma: no cover - allow tests without SDK installed
     BedrockAgentCoreApp = None  # type: ignore
 
-from snapshotter import Snapshotter, make_snapshotter
+from snapshotter import Snapshotter, _safe_id, make_snapshotter
 
 # Resolved lazily on first snapshot/resume; module-level so a single process
 # uses one backend for its lifetime (mode is fixed at runtime registration).
@@ -47,6 +48,33 @@ def _get_snapshotter() -> Snapshotter:
 SHELL_READ_CHUNK = 30 * 1024
 
 
+def _resolve_cwd(req: dict) -> str | None:
+    """Pick a default working directory for exec in tiered mode.
+
+    Returns `<MICROVM_S3FILES_MOUNT_PATH>/<sandbox_id>` (creating it on demand)
+    when mode is tiered and the sandbox_id passes `_safe_id`. Otherwise returns
+    None so the subprocess inherits the agent's cwd (preserving today's
+    behavior). A failure to create the directory also falls back to None so a
+    broken mount never breaks routine command execution.
+    """
+    if os.environ.get("MICROVM_SNAPSHOT_MODE", "") != "tiered":
+        return None
+    sandbox_id = req.get("sandbox_id", "")
+    if not sandbox_id:
+        return None
+    try:
+        _safe_id("sandbox_id", sandbox_id)
+    except ValueError:
+        return None
+    workspace = os.environ.get("MICROVM_S3FILES_MOUNT_PATH", "/workspace")
+    cwd = os.path.join(workspace, sandbox_id)
+    try:
+        os.makedirs(cwd, exist_ok=True)
+    except OSError:
+        return None
+    return cwd
+
+
 def handle_exec(req: dict) -> dict:
     cmd = req.get("cmd") or []
     if not cmd:
@@ -57,6 +85,7 @@ def handle_exec(req: dict) -> dict:
             capture_output=True,
             text=True,
             timeout=req.get("timeout_sec", 300),
+            cwd=_resolve_cwd(req),
         )
         return {
             "stdout": proc.stdout,
@@ -246,6 +275,52 @@ def handle_terminate(req: dict) -> dict:
     return {"ok": True}
 
 
+def handle_checkpoint(req: dict) -> dict:
+    """Promote tier-1 cache contents into the tier-2 workspace.
+
+    In tiered mode, /var/microvm/cache/<sandbox_id>/ is fast scratch storage
+    that the snapshot does NOT capture. To include cache contents in the
+    next snapshot, the user (or their tooling) drops files into a
+    `promote/` subdirectory and invokes this op. We rsync `promote/` into
+    `<workspace>/<sandbox_id>/cache-promoted/` so the next snapshot picks
+    it up. `rsync -a --delete` keeps the destination an exact mirror so
+    removing a file from promote/ also removes it from the workspace copy.
+    """
+    sandbox_id = req.get("sandbox_id", "")
+    try:
+        _safe_id("sandbox_id", sandbox_id)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+
+    mode = os.environ.get("MICROVM_SNAPSHOT_MODE", "")
+    if mode != "tiered":
+        return {
+            "ok": False,
+            "error": f"checkpoint only supported in tiered mode (got {mode!r})",
+        }
+
+    cache_root = os.environ.get("MICROVM_CACHE_ROOT", "/var/microvm/cache")
+    workspace = os.environ.get("MICROVM_S3FILES_MOUNT_PATH", "/workspace")
+
+    src = os.path.join(cache_root, sandbox_id, "promote") + "/"
+    dst = os.path.join(workspace, sandbox_id, "cache-promoted") + "/"
+
+    try:
+        os.makedirs(src, exist_ok=True)
+        os.makedirs(dst, exist_ok=True)
+        subprocess.run(
+            ["rsync", "-a", "--delete", src, dst],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return {"ok": True, "synced": dst}
+    except subprocess.CalledProcessError as e:
+        return {"ok": False, "error": f"rsync failed: {e.stderr or e}"}
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+
+
 def dispatch(req: dict) -> Any:
     op = req.get("op")
     if op == "exec":
@@ -260,6 +335,8 @@ def dispatch(req: dict) -> Any:
         return handle_resume(req)
     if op == "terminate":
         return handle_terminate(req)
+    if op == "checkpoint":
+        return handle_checkpoint(req)
     return {"error": f"unknown op: {op!r}"}
 
 

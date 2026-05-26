@@ -408,6 +408,43 @@ func (b *Backend) Resume(ctx context.Context, snap backend.Snapshot, spec backen
 	}, nil
 }
 
+// Checkpoint asks the shellagent to rsync the tier-1 cache's promote/
+// subdirectory into the tier-2 workspace's cache-promoted/ subdirectory, so
+// the next Snapshot picks it up. Tiered-mode only.
+func (b *Backend) Checkpoint(ctx context.Context, sb backend.Sandbox) (err error) {
+	mode := normalizeMode(b.cfg.AWS.SnapshotMode)
+	t := obs.Time(ctx, obs.MetricCheckpoint, "provider:aws", "mode:"+mode)
+	defer t.Done(&err)
+
+	if mode != "tiered" {
+		return fmt.Errorf("checkpoint is only supported in tiered mode (current mode: %q)", mode)
+	}
+
+	req, err := CheckpointRequest()
+	if err != nil {
+		return err
+	}
+	body, err := b.invoke(ctx, sb, req)
+	if err != nil {
+		return err
+	}
+	var resp struct {
+		OK     bool   `json:"ok"`
+		Synced string `json:"synced"`
+		Error  string `json:"error,omitempty"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return fmt.Errorf("decode checkpoint response: %w (body: %q)", err, truncate(string(body), 512))
+	}
+	if resp.Error != "" {
+		return errors.New(resp.Error)
+	}
+	if !resp.OK {
+		return errors.New("checkpoint failed: agent reported not-ok with no error message")
+	}
+	return nil
+}
+
 func (b *Backend) Terminate(ctx context.Context, sb backend.Sandbox) (err error) {
 	t := obs.Time(ctx, obs.MetricTerminate, "provider:aws")
 	defer t.Done(&err)

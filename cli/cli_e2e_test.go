@@ -197,6 +197,42 @@ func TestE2EEfsModeRoundTrip(t *testing.T) {
 	assert.Equal(t, snap.ID, resumed.Labels["resumed_from"])
 }
 
+func TestE2ETieredModeRoundTrip(t *testing.T) {
+	env := newTestEnv(t)
+	env.fake.snapshotMode = "tiered"
+
+	sb := createSandbox(t, env.app, "tiered-sbx")
+	assert.Equal(t, "tiered", sb.Mode)
+
+	snapOut := runCLIJSON(t, env.app, "sbx", "snapshot", sb.ID, "--name", "ckpt")
+	var snap state.Snapshot
+	require.NoError(t, json.Unmarshal([]byte(snapOut), &snap))
+	assert.Equal(t, "tiered", snap.Mode)
+	assert.Equal(t, "tiered", snap.Kind)
+	assert.Contains(t, snap.Locator, "workspace_prefix")
+	assert.Contains(t, snap.Locator, "snapshot_prefix")
+	assert.Contains(t, snap.Locator, "s3://fake/sessions/"+sb.ID+"/")
+	assert.Contains(t, snap.Locator, "s3://fake/snapshots/"+snap.ID+"/")
+
+	resumeOut := runCLIJSON(t, env.app, "sbx", "resume", snap.ID, "--name", "resumed")
+	var resumed state.Sandbox
+	require.NoError(t, json.Unmarshal([]byte(resumeOut), &resumed))
+	assert.Equal(t, "tiered", resumed.Mode)
+	assert.Equal(t, snap.ID, resumed.Labels["resumed_from"])
+}
+
+func TestE2ECheckpoint(t *testing.T) {
+	env := newTestEnv(t)
+	env.fake.snapshotMode = "tiered"
+
+	sb := createSandbox(t, env.app, "ckpt-sbx")
+	stdout, _, err := runCLI(t, env.app, "sbx", "checkpoint", sb.ID)
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "checkpointed "+sb.ID)
+	require.Len(t, env.fake.checkpoints, 1)
+	assert.Equal(t, sb.SessionID, env.fake.checkpoints[0].SessionID)
+}
+
 func TestE2EResumeRejectsModeMismatch(t *testing.T) {
 	env := newTestEnv(t)
 	env.fake.snapshotMode = "s3"

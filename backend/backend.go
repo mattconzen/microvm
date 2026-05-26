@@ -60,6 +60,11 @@ type LoginOpts struct {
 	// EFS-only. Required when SnapshotMode == "efs"; ignored otherwise.
 	EFSAccessPointArn string
 	EFSMountPath      string // default "/mnt/efs"
+
+	// Tiered-only. Required when SnapshotMode == "tiered". Ignored otherwise.
+	S3FilesAccessPointArn string
+	S3FilesBucket         string // S3 bucket backing the access point (used to mint locators)
+	S3FilesMountPath      string // default "/workspace"
 }
 
 type ExecIO struct {
@@ -88,4 +93,8 @@ type Backend interface {
 	Snapshot(ctx context.Context, sb Sandbox, spec SnapshotSpec) (Snapshot, error)
 	Resume(ctx context.Context, snap Snapshot, spec SandboxSpec) (Sandbox, error)
 	Terminate(ctx context.Context, sb Sandbox) error
+	// Checkpoint promotes tier-1 cache content into the tier-2 workspace so
+	// the next Snapshot includes it. Tiered-mode only; other modes return an
+	// error.
+	Checkpoint(ctx context.Context, sb Sandbox) error
 }

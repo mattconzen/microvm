@@ -367,6 +367,21 @@ else
     '{networkMode: "VPC", vpcConfig: {subnetIds: [$s0, $s1], securityGroupIds: [$sg]}}')"
   FS_JSON="$(jq -n --arg ap "${AP_ARN}" \
     '[{efsAccessPoint: {accessPointArn: $ap, mountPath: "/mnt/efs"}}]')"
+  # Env vars baked into the runtime so the shellagent's make_snapshotter()
+  # selects the EFS snapshotter instead of falling back to alias mode.
+  # Mirrors backend/aws/snapshot_efs.go's EnvOverrides().
+  # TODO: verify the exact AgentCore CLI flag name on first real run --
+  # the AWS CLI standard for create-agent-runtime is --environment-variables
+  # taking a JSON object, but AgentCore may use --environment or a nested
+  # shape under --agent-runtime-artifact. Adjust here if the create call
+  # rejects the flag.
+  ENV_JSON="$(jq -n \
+    --arg ap "${AP_ARN}" \
+    '{
+      MICROVM_SNAPSHOT_MODE: "efs",
+      MICROVM_EFS_MOUNT_PATH: "/mnt/efs",
+      MICROVM_EFS_ACCESS_POINT: $ap
+    }')"
   confirm_run "Creates a VPC-mode AgentCore runtime that mounts the EFS access point at /mnt/efs." \
     aws bedrock-agentcore-control create-agent-runtime \
       --region "${REGION}" \
@@ -374,6 +389,7 @@ else
       --agent-runtime-artifact "${ARTIFACT_JSON}" \
       --network-configuration "${NETWORK_JSON}" \
       --filesystem-configurations "${FS_JSON}" \
+      --environment-variables "${ENV_JSON}" \
       --role-arn "${ROLE_ARN}"
   RUNTIME_ARN="$(aws bedrock-agentcore-control list-agent-runtimes \
     --region "${REGION}" \

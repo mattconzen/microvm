@@ -253,9 +253,82 @@ def test_make_snapshotter_efs_defaults_mount(monkeypatch):
     assert got.mount == "/mnt/efs"
 
 
-def test_make_snapshotter_tiered_not_implemented(monkeypatch):
+def test_tiered_snapshotter_emits_prefix_locator(monkeypatch):
+    calls = []
+
+    class FakeTiered(sn.TieredSnapshotter):
+        def _aws_cp_recursive(self, src, dst):
+            calls.append((src, dst))
+
+    monkeypatch.setenv("BEDROCK_AGENTCORE_SESSION_ID", "sess-1")
+    s = FakeTiered(bucket="microvm-fs", mount="/workspace")
+    out = s.snapshot("snp_x", "baseline", sandbox_id="mvm_a")
+
+    assert out["alias"] == "sess-1"
+    locator = json.loads(out["locator"])
+    assert locator == {
+        "workspace_prefix": "s3://microvm-fs/sessions/mvm_a/",
+        "snapshot_prefix":  "s3://microvm-fs/snapshots/snp_x/",
+    }
+    assert calls == [("s3://microvm-fs/sessions/mvm_a/", "s3://microvm-fs/snapshots/snp_x/")]
+
+
+def test_tiered_snapshotter_resume_copies_back(monkeypatch):
+    calls = []
+
+    class FakeTiered(sn.TieredSnapshotter):
+        def _aws_cp_recursive(self, src, dst):
+            calls.append((src, dst))
+
+    monkeypatch.setenv("BEDROCK_AGENTCORE_SESSION_ID", "sess-2")
+    s = FakeTiered(bucket="microvm-fs", mount="/workspace")
+    locator = json.dumps({
+        "workspace_prefix": "s3://microvm-fs/sessions/mvm_old/",
+        "snapshot_prefix":  "s3://microvm-fs/snapshots/snp_x/",
+    })
+    out = s.resume(locator, "sess-2", sandbox_id="mvm_new")
+    assert out["alias"] == "sess-2"
+    assert calls == [("s3://microvm-fs/snapshots/snp_x/", "s3://microvm-fs/sessions/mvm_new/")]
+
+
+def test_tiered_snapshot_requires_sandbox_id():
+    s = sn.TieredSnapshotter(bucket="b", mount="/workspace")
+    out = s.snapshot("snp_x", "n", sandbox_id="")
+    assert "sandbox_id required" in out["error"]
+
+
+def test_tiered_resume_empty_locator_errors():
+    s = sn.TieredSnapshotter(bucket="b", mount="/workspace")
+    out = s.resume("", "sess-1", sandbox_id="mvm_x")
+    assert "empty locator" in out["error"]
+
+
+def test_tiered_resume_missing_snapshot_prefix_errors():
+    s = sn.TieredSnapshotter(bucket="b", mount="/workspace")
+    out = s.resume(json.dumps({"workspace_prefix": "s3://b/sessions/o/"}), "sess-1", sandbox_id="mvm_x")
+    assert "missing snapshot_prefix" in out["error"]
+
+
+def test_tiered_rejects_traversal_sandbox_id():
+    s = sn.TieredSnapshotter(bucket="b", mount="/workspace")
+    out = s.snapshot("snp_x", "n", sandbox_id="../etc")
+    assert "invalid" in out["error"]
+
+
+def test_make_snapshotter_tiered(monkeypatch):
     monkeypatch.setenv("MICROVM_SNAPSHOT_MODE", "tiered")
-    with pytest.raises(NotImplementedError, match="PR3"):
+    monkeypatch.setenv("MICROVM_S3FILES_BUCKET", "microvm-fs")
+    monkeypatch.setenv("MICROVM_S3FILES_MOUNT_PATH", "/workspace")
+    got = sn.make_snapshotter()
+    assert isinstance(got, sn.TieredSnapshotter)
+    assert got.bucket == "microvm-fs"
+    assert got.mount == "/workspace"
+
+
+def test_make_snapshotter_tiered_requires_bucket(monkeypatch):
+    monkeypatch.setenv("MICROVM_SNAPSHOT_MODE", "tiered")
+    monkeypatch.delenv("MICROVM_S3FILES_BUCKET", raising=False)
+    with pytest.raises(RuntimeError, match="MICROVM_S3FILES_BUCKET"):
         sn.make_snapshotter()
 
 

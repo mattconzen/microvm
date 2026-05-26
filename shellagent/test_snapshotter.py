@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
+import pathlib
 import shutil
+import subprocess
 
 import pytest
 
@@ -133,10 +136,121 @@ def test_make_snapshotter_s3_requires_bucket(monkeypatch):
         sn.make_snapshotter()
 
 
-def test_make_snapshotter_efs_not_implemented(monkeypatch):
+import shutil as _shutil
+_HAS_RSYNC = _shutil.which("rsync") is not None
+_skip_if_no_rsync = pytest.mark.skipif(not _HAS_RSYNC, reason="rsync not installed")
+
+
+@_skip_if_no_rsync
+def test_efs_snapshotter_roundtrips_workspace(tmp_path):
+    # We fake out the rsync subprocess to operate on local paths so the test
+    # runs without an actual EFS mount.
+    mount = tmp_path / "efs"
+    sessions = mount / "sessions" / "mvm_abc"
+    sessions.mkdir(parents=True)
+    (sessions / "hello.txt").write_text("hi from sandbox")
+    (sessions / "sub").mkdir()
+    (sessions / "sub" / "deep.txt").write_text("nested")
+
+    s = sn.EfsSnapshotter(mount=str(mount))
+    out = s.snapshot("snp_xyz", "baseline", sandbox_id="mvm_abc")
+
+    locator = json.loads(out["locator"])
+    assert locator["efs_path"] == str(mount / "snapshots" / "snp_xyz")
+    snap_path = mount / "snapshots" / "snp_xyz"
+    assert (snap_path / "hello.txt").read_text() == "hi from sandbox"
+    assert (snap_path / "sub" / "deep.txt").read_text() == "nested"
+    # No leftover .tmp dir after a successful snapshot.
+    assert not (mount / ".tmp" / "snp_xyz").exists()
+
+
+@_skip_if_no_rsync
+def test_efs_snapshotter_resume_into_new_session(tmp_path):
+    mount = tmp_path / "efs"
+    snap_dir = mount / "snapshots" / "snp_xyz"
+    snap_dir.mkdir(parents=True)
+    (snap_dir / "restored.txt").write_text("from snap")
+
+    s = sn.EfsSnapshotter(mount=str(mount))
+    locator = json.dumps({"efs_path": str(snap_dir)})
+    # The shellagent reads its own sandbox_id from the envelope; pass it in.
+    out = s.resume(locator, "sess-1", sandbox_id="mvm_new")
+    assert out["alias"] == "sess-1"
+    assert (mount / "sessions" / "mvm_new" / "restored.txt").read_text() == "from snap"
+
+
+def test_efs_resume_empty_locator_errors(tmp_path):
+    s = sn.EfsSnapshotter(mount=str(tmp_path))
+    out = s.resume("", "sess-1", sandbox_id="mvm_x")
+    assert "empty locator" in out["error"]
+
+
+def test_efs_resume_missing_efs_path_errors(tmp_path):
+    s = sn.EfsSnapshotter(mount=str(tmp_path))
+    out = s.resume(json.dumps({"other": "x"}), "sess-1", sandbox_id="mvm_x")
+    assert "missing efs_path" in out["error"]
+
+
+def test_efs_snapshot_requires_sandbox_id(tmp_path):
+    s = sn.EfsSnapshotter(mount=str(tmp_path))
+    out = s.snapshot("snp_x", "n", sandbox_id="")
+    assert "sandbox_id required" in out["error"]
+
+
+def test_efs_snapshot_rejects_traversal_sandbox_id(tmp_path):
+    s = sn.EfsSnapshotter(mount=str(tmp_path))
+    out = s.snapshot("snp_x", "n", sandbox_id="../etc")
+    assert "invalid" in out["error"]
+    assert out["locator"] == ""
+
+
+def test_efs_snapshot_rejects_traversal_snap_id(tmp_path):
+    s = sn.EfsSnapshotter(mount=str(tmp_path))
+    out = s.snapshot("../../etc", "n", sandbox_id="mvm_ok")
+    assert "invalid" in out["error"]
+    assert out["locator"] == ""
+
+
+def test_efs_resume_rejects_traversal_sandbox_id(tmp_path):
+    s = sn.EfsSnapshotter(mount=str(tmp_path))
+    locator = json.dumps({"efs_path": str(tmp_path / "snapshots" / "snp_x")})
+    out = s.resume(locator, "sess-1", sandbox_id="../etc")
+    assert "invalid" in out["error"]
+
+
+def test_efs_partial_snapshot_is_cleaned_up(tmp_path, monkeypatch):
+    """If rsync fails mid-copy, the .tmp dir should be removed and no
+    snapshot dir should appear at the published path."""
+    mount = tmp_path / "efs"
+    (mount / "sessions" / "mvm_a").mkdir(parents=True)
+
+    class BoomEfs(sn.EfsSnapshotter):
+        def _rsync(self, src, dst):
+            # Simulate a partial write before raising.
+            os.makedirs(dst, exist_ok=True)
+            (pathlib.Path(dst) / "half-written.txt").write_text("oops")
+            raise subprocess.CalledProcessError(1, ["rsync"], stderr="disk full")
+
+    s = BoomEfs(mount=str(mount))
+    out = s.snapshot("snp_bad", "n", sandbox_id="mvm_a")
+    assert "rsync failed" in out["error"]
+    assert not (mount / "snapshots" / "snp_bad").exists()
+    assert not (mount / ".tmp" / "snp_bad").exists()
+
+
+def test_make_snapshotter_efs(monkeypatch):
     monkeypatch.setenv("MICROVM_SNAPSHOT_MODE", "efs")
-    with pytest.raises(NotImplementedError, match="PR2"):
-        sn.make_snapshotter()
+    monkeypatch.setenv("MICROVM_EFS_MOUNT_PATH", "/data")
+    got = sn.make_snapshotter()
+    assert isinstance(got, sn.EfsSnapshotter)
+    assert got.mount == "/data"
+
+
+def test_make_snapshotter_efs_defaults_mount(monkeypatch):
+    monkeypatch.setenv("MICROVM_SNAPSHOT_MODE", "efs")
+    monkeypatch.delenv("MICROVM_EFS_MOUNT_PATH", raising=False)
+    got = sn.make_snapshotter()
+    assert got.mount == "/mnt/efs"
 
 
 def test_make_snapshotter_tiered_not_implemented(monkeypatch):

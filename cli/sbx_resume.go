@@ -25,6 +25,10 @@ func newResumeCmd(ctx context.Context, app *App, g *GlobalFlags) *cobra.Command 
 			if err != nil {
 				return err
 			}
+			// Mint the new sandbox ID up front so it flows through the
+			// envelope (via SandboxSpec.ID) before invoke wraps the resume
+			// call — EFS mode needs it to pick the destination subdir.
+			newID := state.NewSandboxID()
 			sb, err := b.Resume(ctx,
 				backend.Snapshot{
 					ID:              snap.ID,
@@ -36,13 +40,13 @@ func newResumeCmd(ctx context.Context, app *App, g *GlobalFlags) *cobra.Command 
 					Locator:         snap.Locator,
 					Name:            snap.Name,
 				},
-				backend.SandboxSpec{Name: name},
+				backend.SandboxSpec{Name: name, ID: newID},
 			)
 			if err != nil {
 				return err
 			}
 			rec := state.Sandbox{
-				ID:        state.NewSandboxID(),
+				ID:        newID,
 				Provider:  b.Name(),
 				SessionID: sb.SessionID,
 				Name:      name,

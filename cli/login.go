@@ -41,5 +41,7 @@ Subsequent invocations re-validate the runtime is still reachable.`,
 	cmd.Flags().BoolVar(&opts.Rebuild, "rebuild", false, "force re-binding (does not push images)")
 	cmd.Flags().StringVar(&opts.SnapshotMode, "snapshot-mode", "", "snapshot backend: none|s3|efs|tiered (default: none)")
 	cmd.Flags().StringVar(&opts.SnapshotBucket, "snapshot-bucket", "", "S3 bucket for snapshot storage (required if --snapshot-mode is s3 or tiered)")
+	cmd.Flags().StringVar(&opts.EFSAccessPointArn, "efs-access-point-arn", "", "EFS access point ARN (required when --snapshot-mode is efs)")
+	cmd.Flags().StringVar(&opts.EFSMountPath, "efs-mount-path", "", "EFS mount path inside the runtime (default: /mnt/efs)")
 	return cmd
 }

@@ -171,6 +171,32 @@ func TestE2ESnapshotPersistsModeAndLocator(t *testing.T) {
 	assert.True(t, strings.HasPrefix(call.Spec.ID, "snp_"), "spec.ID should be minted before backend call, got %q", call.Spec.ID)
 }
 
+func TestE2EEfsModeRoundTrip(t *testing.T) {
+	env := newTestEnv(t)
+	env.fake.snapshotMode = "efs"
+
+	sb := createSandbox(t, env.app, "efs-sbx")
+	assert.Equal(t, "efs", sb.Mode)
+
+	snapOut := runCLIJSON(t, env.app, "sbx", "snapshot", sb.ID, "--name", "ckpt")
+	var snap state.Snapshot
+	require.NoError(t, json.Unmarshal([]byte(snapOut), &snap))
+	assert.Equal(t, "efs", snap.Mode)
+	assert.Equal(t, "efs", snap.Kind)
+	assert.Contains(t, snap.Locator, "efs_path")
+	assert.Contains(t, snap.Locator, "/mnt/efs/snapshots/")
+
+	stored, err := env.store.GetSnapshot(snap.ID)
+	require.NoError(t, err)
+	assert.Equal(t, snap.Locator, stored.Locator)
+
+	resumeOut := runCLIJSON(t, env.app, "sbx", "resume", snap.ID, "--name", "resumed")
+	var resumed state.Sandbox
+	require.NoError(t, json.Unmarshal([]byte(resumeOut), &resumed))
+	assert.Equal(t, "efs", resumed.Mode)
+	assert.Equal(t, snap.ID, resumed.Labels["resumed_from"])
+}
+
 func TestE2EResumeRejectsModeMismatch(t *testing.T) {
 	env := newTestEnv(t)
 	env.fake.snapshotMode = "s3"

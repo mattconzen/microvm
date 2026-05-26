@@ -67,3 +67,23 @@ func TestSnapshotResumeRequests(t *testing.T) {
 	assert.Equal(t, `{"s3_uri":"s3://b/k"}`, got.Locator)
 	assert.Equal(t, "s3", got.Mode)
 }
+
+func TestInjectSandboxID_PreservesOtherFields(t *testing.T) {
+	orig, err := SnapshotRequest(backend.SnapshotSpec{ID: "snp_1", Name: "n"}, "efs")
+	require.NoError(t, err)
+	patched, err := injectSandboxID(orig, "mvm_abc")
+	require.NoError(t, err)
+	var got Request
+	require.NoError(t, json.Unmarshal(patched, &got))
+	assert.Equal(t, "mvm_abc", got.SandboxID)
+	assert.Equal(t, "snp_1", got.SnapID)
+	assert.Equal(t, "n", got.Name)
+	assert.Equal(t, "efs", got.Mode)
+}
+
+func TestInjectSandboxID_EmptyIsNoop(t *testing.T) {
+	orig := []byte(`{"op":"exec","cmd":["echo","hi"]}`)
+	patched, err := injectSandboxID(orig, "")
+	require.NoError(t, err)
+	assert.JSONEq(t, string(orig), string(patched))
+}

@@ -35,10 +35,7 @@ func ProvisionerFor(mode string, opts backend.LoginOpts) (snapshotProvisioner, e
 	case "s3":
 		return newS3Provisioner(opts)
 	case "efs":
-		return nil, fmt.Errorf(
-			"snapshot mode %q not implemented yet — see docs/plans/2026-05-23-snapshot-modes-design.md (PR2)",
-			mode,
-		)
+		return newEfsProvisioner(opts)
 	case "tiered":
 		return nil, fmt.Errorf(
 			"snapshot mode %q not implemented yet — see docs/plans/2026-05-23-snapshot-modes-design.md (PR3)",

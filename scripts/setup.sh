@@ -108,12 +108,25 @@ ECR_URI="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${REPO_NAME}"
 info "Will create ${ECR_URI} if it doesn't already exist."
 if aws ecr describe-repositories --repository-names "${REPO_NAME}" --region "${REGION}" >/dev/null 2>&1; then
   ok "Repository ${REPO_NAME} already exists, skipping create."
+  # Idempotent re-tag: ensure pre-existing repos get the microvm=managed tag so
+  # teardown can safely identify repos we own.
+  EXISTING_REPO_ARN="$(aws ecr describe-repositories \
+    --repository-names "${REPO_NAME}" \
+    --region "${REGION}" \
+    --query 'repositories[0].repositoryArn' \
+    --output text)"
+  confirm_run "Ensures the existing ECR repo is tagged microvm=managed (idempotent; lets teardown safely identify repos we own)." \
+    aws ecr tag-resource \
+      --resource-arn "${EXISTING_REPO_ARN}" \
+      --region "${REGION}" \
+      --tags Key=microvm,Value=managed
 else
   confirm_run "Creates an ECR repository to hold the shellagent container image." \
     aws ecr create-repository \
       --repository-name "${REPO_NAME}" \
       --region "${REGION}" \
-      --image-scanning-configuration scanOnPush=true
+      --image-scanning-configuration scanOnPush=true \
+      --tags Key=microvm,Value=managed
 fi
 
 step "Build and push the shellagent image (ARM64)"

@@ -103,6 +103,28 @@ def test_dispatch_routes_snapshot_resume(monkeypatch):
     assert res == {"alias": "sess-abc"}
 
 
+def test_dispatch_snapshot_forwards_sandbox_id(monkeypatch):
+    monkeypatch.setenv("BEDROCK_AGENTCORE_SESSION_ID", "sess-d")
+    captured = {}
+
+    class Spy:
+        mode = "spy"
+
+        def snapshot(self, snap_id, name, sandbox_id=""):
+            captured["snapshot"] = (snap_id, name, sandbox_id)
+            return {"alias": "sess-d", "name": name, "locator": ""}
+
+        def resume(self, locator, alias, sandbox_id=""):
+            captured["resume"] = (locator, alias, sandbox_id)
+            return {"alias": alias}
+
+    app._snapshotter = Spy()
+    app.dispatch({"op": "snapshot", "name": "n", "snap_id": "snp_1", "sandbox_id": "mvm_xyz"})
+    assert captured["snapshot"] == ("snp_1", "n", "mvm_xyz")
+    app.dispatch({"op": "resume", "alias": "sess-1", "locator": "{}", "sandbox_id": "mvm_xyz"})
+    assert captured["resume"] == ("{}", "sess-1", "mvm_xyz")
+
+
 def test_snapshot_surfaces_backend_errors(monkeypatch):
     # If make_snapshotter raises (bad env), handle_snapshot should return a
     # well-formed dict with the error captured rather than propagate.

@@ -240,6 +240,28 @@ func TestResumeFromAliasReusesSession(t *testing.T) {
 	assert.Equal(t, "sess-1", awssdk.ToString(fi.gotInput.RuntimeSessionId))
 }
 
+func TestResumeIncludesSandboxIDInEnvelope(t *testing.T) {
+	var captured awsbackend.Request
+	fi := &fakeInvoker{respond: func(req []byte) []byte {
+		_ = json.Unmarshal(req, &captured)
+		b, _ := json.Marshal(awsbackend.ResumeResponse{Alias: "sess-1"})
+		return b
+	}}
+	b, _ := newTestBackend(t, fi)
+	sb, err := b.Resume(context.Background(),
+		backend.Snapshot{Kind: "alias", TargetSessionID: "sess-1", Provider: "aws"},
+		backend.SandboxSpec{Name: "resumed", ID: "mvm_resumed"},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, awsbackend.OpResume, captured.Op)
+	// The minted sandbox id must reach the shellagent via the envelope so
+	// EFS resume can materialise into the right per-sandbox subdir.
+	assert.Equal(t, "mvm_resumed", captured.SandboxID)
+	// And the returned Sandbox should echo the id back so callers (e.g.
+	// the CLI persisting state) can read it without re-minting.
+	assert.Equal(t, "mvm_resumed", sb.ID)
+}
+
 func TestResumeRebindsToNewAlias(t *testing.T) {
 	fi := &fakeInvoker{respond: func(_ []byte) []byte {
 		b, _ := json.Marshal(awsbackend.ResumeResponse{Alias: "sess-2"})
@@ -362,6 +384,31 @@ func TestLoginRejectsS3WithoutBucket(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--snapshot-bucket")
+}
+
+func TestLoginPersistsEfsMode(t *testing.T) {
+	t.Setenv("MICROVM_HOME", t.TempDir())
+	cfg := &config.Config{DefaultProvider: "aws"}
+	b := awsbackend.New(cfg, &fakeInvoker{}, fakeControl{}, fakeIdentity{})
+	err := b.Login(context.Background(), backend.LoginOpts{
+		RuntimeArn:        "arn:aws:bedrock-agentcore:us-east-1:123:runtime/microvm-shell",
+		SnapshotMode:      "efs",
+		EFSAccessPointArn: "arn:aws:elasticfilesystem:us-east-1:123:access-point/fsap-abc",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "efs", cfg.AWS.SnapshotMode)
+}
+
+func TestLoginRejectsEfsWithoutAccessPoint(t *testing.T) {
+	t.Setenv("MICROVM_HOME", t.TempDir())
+	cfg := &config.Config{DefaultProvider: "aws"}
+	b := awsbackend.New(cfg, &fakeInvoker{}, fakeControl{}, fakeIdentity{})
+	err := b.Login(context.Background(), backend.LoginOpts{
+		RuntimeArn:   "arn:aws:bedrock-agentcore:us-east-1:123:runtime/microvm-shell",
+		SnapshotMode: "efs",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--efs-access-point-arn")
 }
 
 func TestLoginRejectsUnknownMode(t *testing.T) {

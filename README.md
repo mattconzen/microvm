@@ -14,6 +14,31 @@ go build ./...
 ./microvm --help
 ```
 
+## Snapshot modes
+
+Pick a snapshot backend at runtime registration:
+
+```sh
+microvm login --snapshot-mode s3 --snapshot-bucket my-bucket
+microvm login --snapshot-mode efs --efs-id fs-0123...   # PR2 (in progress)
+microvm login --snapshot-mode tiered --snapshot-bucket b # PR3 (in progress)
+```
+
+Modes:
+
+- `none` (default) — session aliases only. Compatible with existing deployments;
+  matches today's behavior. Snapshot/resume are no-ops at the AWS layer.
+- `s3` — tar+gzip the working tree to S3 on snapshot, download+restore on resume.
+  Durable across runtime evictions. Requires `--snapshot-bucket`.
+- `efs` — EFS-backed snapshots via `cp -a` on the runtime's EFS mount. (PR2)
+- `tiered` — fast session-local tier + async S3 durability. (PR3)
+
+Mode is a property of the AgentCore runtime, not the sandbox: every sandbox
+under a runtime uses the same snapshot mode. Resuming a snapshot taken under
+a different mode is rejected with a clear error. See
+[docs/plans/2026-05-23-snapshot-modes-design.md](docs/plans/2026-05-23-snapshot-modes-design.md)
+for the architecture and rationale.
+
 ## Layout
 
 - `cli/` — cobra commands (`sbx create`, `sbx exec`, `sbx cp`, `sbx snapshot`, etc.)

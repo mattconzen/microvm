@@ -19,6 +19,7 @@ import (
 	"github.com/mattconzen/microvm/backend"
 	"github.com/mattconzen/microvm/config"
 	"github.com/mattconzen/microvm/obs"
+	"github.com/mattconzen/microvm/state"
 )
 
 // Invoker abstracts the AgentCore data-plane client so tests can fake it.
@@ -43,7 +44,17 @@ type Backend struct {
 	identity IdentityResolver
 	creds    CredentialsProvider // for SigV4-signed WebSocket handshakes (shell)
 	region   string              // resolved AWS region for SigV4 signing
+	store    *state.Store        // optional; set by WithStore for runtime-record persistence
 	now      func() time.Time
+}
+
+// WithStore wires a state.Store into the backend so Login can persist a
+// Runtime record. Returns the backend for chaining. Without a store, Login
+// still works — the mode is recorded in config — but per-sandbox lookups have
+// to read config instead of state.
+func (b *Backend) WithStore(s *state.Store) *Backend {
+	b.store = s
+	return b
 }
 
 func New(cfg *config.Config, invoker Invoker, control Controller, identity IdentityResolver) *Backend {
@@ -106,6 +117,17 @@ func (b *Backend) Login(ctx context.Context, opts backend.LoginOpts) (err error)
 			"    4) microvm login --runtime-arn <returned-arn>")
 	}
 
+	// Snapshot-mode dispatch. Empty mode resolves to "none" (today's
+	// alias-only behavior). s3 requires --snapshot-bucket; efs/tiered are
+	// stubbed for PR2/PR3 and fail fast with a useful pointer.
+	prov, err := ProvisionerFor(opts.SnapshotMode, opts)
+	if err != nil {
+		return err
+	}
+	if err := prov.ValidateLoginOpts(opts); err != nil {
+		return err
+	}
+
 	b.cfg.AWS.AgentRuntimeArn = arn
 	if opts.ImageDigest != "" {
 		b.cfg.AWS.ECRImageDigest = opts.ImageDigest
@@ -113,10 +135,32 @@ func (b *Backend) Login(ctx context.Context, opts backend.LoginOpts) (err error)
 	if opts.Region != "" {
 		b.cfg.AWS.Region = opts.Region
 	}
+	b.cfg.AWS.SnapshotMode = prov.Mode()
+	b.cfg.AWS.SnapshotBucket = opts.SnapshotBucket
 	if err := config.Save(b.cfg); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
-	obs.L(ctx).Info("login.saved", "agent_runtime_arn", arn, "region", b.cfg.AWS.Region)
+	obs.L(ctx).Info("login.saved",
+		"agent_runtime_arn", arn,
+		"region", b.cfg.AWS.Region,
+		"snapshot_mode", b.cfg.AWS.SnapshotMode,
+	)
+
+	// Persist a Runtime record so per-sandbox commands can resolve mode
+	// without re-reading config. Best-effort: a store-less Backend (used by
+	// some unit tests) still completes Login successfully.
+	if b.store != nil {
+		if err := b.store.PutRuntime(state.Runtime{
+			Arn:            arn,
+			Region:         b.cfg.AWS.Region,
+			SnapshotMode:   b.cfg.AWS.SnapshotMode,
+			SnapshotBucket: b.cfg.AWS.SnapshotBucket,
+			ImageDigest:    b.cfg.AWS.ECRImageDigest,
+			UpdatedAt:      b.now(),
+		}); err != nil {
+			return fmt.Errorf("persist runtime record: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -140,6 +184,7 @@ func (b *Backend) Create(ctx context.Context, spec backend.SandboxSpec) (sb back
 		Name:      spec.Name,
 		CPUs:      spec.CPUs,
 		MemoryMB:  spec.MemoryMB,
+		Mode:      normalizeMode(b.cfg.AWS.SnapshotMode),
 		CreatedAt: b.now(),
 	}, nil
 }
@@ -264,16 +309,22 @@ func (b *Backend) Shell(ctx context.Context, sb backend.Sandbox, tty backend.TTY
 	return err
 }
 
-func (b *Backend) Snapshot(ctx context.Context, sb backend.Sandbox, name string) (snap backend.Snapshot, err error) {
-	t := obs.Time(ctx, obs.MetricSnapshot, "provider:aws", "kind:alias")
+func (b *Backend) Snapshot(ctx context.Context, sb backend.Sandbox, spec backend.SnapshotSpec) (snap backend.Snapshot, err error) {
+	mode := normalizeMode(b.cfg.AWS.SnapshotMode)
+	t := obs.Time(ctx, obs.MetricSnapshot, "provider:aws", "mode:"+mode)
 	defer t.Done(&err)
-	// AgentCore has no checkpoint API. We record an alias to the session ID;
-	// resuming it just re-invokes the same sticky runtimeSessionId.
-	obs.L(ctx).Warn("aws.snapshot.alias",
-		"note", "AWS snapshots are session aliases, not durable filesystem checkpoints. State persists only as long as the sticky session does.",
-		"session_id", sb.SessionID,
-	)
-	req, err := SnapshotRequest(name)
+
+	if mode == "none" {
+		// AgentCore has no checkpoint API in alias mode. The "snapshot" is just
+		// a sticky-session pointer; eviction loses everything. Warn loudly so
+		// users don't mistake the success for durability.
+		obs.L(ctx).Warn("aws.snapshot.alias",
+			"note", "AWS snapshots are session aliases, not durable filesystem checkpoints. State persists only as long as the sticky session does.",
+			"session_id", sb.SessionID,
+		)
+	}
+
+	req, err := SnapshotRequest(spec, mode)
 	if err != nil {
 		return snap, err
 	}
@@ -288,27 +339,43 @@ func (b *Backend) Snapshot(ctx context.Context, sb backend.Sandbox, name string)
 	if resp.Error != "" {
 		return snap, errors.New(resp.Error)
 	}
-	alias := resp.Alias
-	if alias == "" {
-		alias = sb.SessionID
+	target := resp.Alias
+	if target == "" {
+		target = sb.SessionID
+	}
+	// Kind preserved for backward-compat with pre-mode records; "alias" stays
+	// the legacy spelling for mode=none, and we use the mode name otherwise.
+	kind := "alias"
+	if mode != "none" {
+		kind = mode
 	}
 	return backend.Snapshot{
 		SandboxID:       sb.ID,
 		Provider:        "aws",
-		TargetSessionID: alias,
-		Kind:            "alias",
-		Name:            name,
+		TargetSessionID: target,
+		Kind:            kind,
+		Mode:            mode,
+		Locator:         resp.Locator,
+		Name:            spec.Name,
 		CreatedAt:       b.now(),
 	}, nil
 }
 
 func (b *Backend) Resume(ctx context.Context, snap backend.Snapshot, spec backend.SandboxSpec) (sb backend.Sandbox, err error) {
-	t := obs.Time(ctx, obs.MetricResume, "provider:aws", "kind:"+snap.Kind)
+	snapMode := normalizeMode(snap.Mode)
+	runtimeMode := normalizeMode(b.cfg.AWS.SnapshotMode)
+	t := obs.Time(ctx, obs.MetricResume, "provider:aws", "mode:"+snapMode)
 	defer t.Done(&err)
-	if snap.Kind != "alias" {
-		return sb, fmt.Errorf("unsupported snapshot kind %q for aws backend", snap.Kind)
+
+	if snapMode != runtimeMode {
+		return sb, fmt.Errorf(
+			"snapshot mode %q does not match active runtime mode %q. "+
+				"Re-register with `microvm login --snapshot-mode %s ...` to resume this snapshot.",
+			snapMode, runtimeMode, snapMode,
+		)
 	}
-	req, err := ResumeRequest(snap.TargetSessionID)
+
+	req, err := ResumeRequest(snap.TargetSessionID, snap.Locator, snapMode)
 	if err != nil {
 		return sb, err
 	}
@@ -331,6 +398,7 @@ func (b *Backend) Resume(ctx context.Context, snap backend.Snapshot, spec backen
 		Provider:  "aws",
 		SessionID: sessionID,
 		Name:      spec.Name,
+		Mode:      snapMode,
 		CreatedAt: b.now(),
 	}, nil
 }
@@ -395,4 +463,13 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// normalizeMode collapses the empty/legacy spelling to "none" so the mode
+// comparison and dispatch logic only ever sees the canonical names.
+func normalizeMode(mode string) string {
+	if mode == "" {
+		return "none"
+	}
+	return mode
 }

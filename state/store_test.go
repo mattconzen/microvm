@@ -65,6 +65,48 @@ func TestSnapshotRoundtrip(t *testing.T) {
 	assert.Equal(t, snap.TargetSessionID, got.TargetSessionID)
 }
 
+func TestSnapshotPersistsModeAndLocator(t *testing.T) {
+	s := openStore(t)
+	snap := state.Snapshot{
+		ID:              state.NewSnapshotID(),
+		SandboxID:       "mvm_x",
+		Provider:        "aws",
+		TargetSessionID: "sess-1",
+		Kind:            "s3",
+		Mode:            "s3",
+		Locator:         `{"s3_uri":"s3://b/microvm/snp_x.tar.gz"}`,
+		Name:            "demo",
+		CreatedAt:       time.Now().UTC().Truncate(time.Second),
+	}
+	require.NoError(t, s.PutSnapshot(snap))
+	got, err := s.GetSnapshot(snap.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "s3", got.Mode)
+	assert.Contains(t, got.Locator, "s3://b/microvm/snp_x.tar.gz")
+}
+
+func TestRuntimeRoundtrip(t *testing.T) {
+	s := openStore(t)
+	rt := state.Runtime{
+		Arn:            "arn:aws:bedrock-agentcore:us-east-1:123:runtime/microvm-shell",
+		Region:         "us-east-1",
+		SnapshotMode:   "s3",
+		SnapshotBucket: "my-bucket",
+		ImageDigest:    "sha256:deadbeef",
+		UpdatedAt:      time.Now().UTC().Truncate(time.Second),
+	}
+	require.NoError(t, s.PutRuntime(rt))
+	got, err := s.GetRuntime(rt.Arn)
+	require.NoError(t, err)
+	assert.Equal(t, rt, got)
+}
+
+func TestRuntimeNotFound(t *testing.T) {
+	s := openStore(t)
+	_, err := s.GetRuntime("arn:does-not-exist")
+	assert.ErrorIs(t, err, state.ErrNotFound)
+}
+
 func TestIDFormat(t *testing.T) {
 	id := state.NewSandboxID()
 	assert.True(t, strings.HasPrefix(id, "mvm_"), "got %q", id)

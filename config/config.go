@@ -15,10 +15,12 @@ type Config struct {
 }
 
 type AWSConfig struct {
-	Region           string `yaml:"region"`
-	AgentRuntimeArn  string `yaml:"agent_runtime_arn"`
-	ECRImage         string `yaml:"ecr_image"`
-	ECRImageDigest   string `yaml:"ecr_image_digest"`
+	Region          string `yaml:"region"`
+	AgentRuntimeArn string `yaml:"agent_runtime_arn"`
+	ECRImage        string `yaml:"ecr_image"`
+	ECRImageDigest  string `yaml:"ecr_image_digest"`
+	SnapshotMode    string `yaml:"snapshot_mode,omitempty"`
+	SnapshotBucket  string `yaml:"snapshot_bucket,omitempty"`
 }
 
 func Dir() (string, error) {

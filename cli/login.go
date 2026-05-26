@@ -39,5 +39,7 @@ Subsequent invocations re-validate the runtime is still reachable.`,
 	cmd.Flags().StringVar(&opts.RuntimeArn, "runtime-arn", "", "Bedrock AgentCore runtime ARN to bind")
 	cmd.Flags().StringVar(&opts.ImageDigest, "image-digest", "", "ECR image digest the runtime points at (for drift detection)")
 	cmd.Flags().BoolVar(&opts.Rebuild, "rebuild", false, "force re-binding (does not push images)")
+	cmd.Flags().StringVar(&opts.SnapshotMode, "snapshot-mode", "", "snapshot backend: none|s3|efs|tiered (default: none)")
+	cmd.Flags().StringVar(&opts.SnapshotBucket, "snapshot-bucket", "", "S3 bucket for snapshot storage (required if --snapshot-mode is s3 or tiered)")
 	return cmd
 }

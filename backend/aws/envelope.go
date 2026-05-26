@@ -3,6 +3,8 @@ package aws
 import (
 	"encoding/base64"
 	"encoding/json"
+
+	"github.com/mattconzen/microvm/backend"
 )
 
 type Op string
@@ -17,12 +19,15 @@ const (
 )
 
 type Request struct {
-	Op    Op       `json:"op"`
-	Cmd   []string `json:"cmd,omitempty"`
-	Path  string   `json:"path,omitempty"`
-	B64   string   `json:"b64,omitempty"`
-	Name  string   `json:"name,omitempty"`
-	Alias string   `json:"alias,omitempty"`
+	Op      Op       `json:"op"`
+	Cmd     []string `json:"cmd,omitempty"`
+	Path    string   `json:"path,omitempty"`
+	B64     string   `json:"b64,omitempty"`
+	Name    string   `json:"name,omitempty"`
+	Alias   string   `json:"alias,omitempty"`
+	SnapID  string   `json:"snap_id,omitempty"`
+	Mode    string   `json:"mode,omitempty"`
+	Locator string   `json:"locator,omitempty"`
 }
 
 type ExecResponse struct {
@@ -45,9 +50,11 @@ type GetResponse struct {
 }
 
 type SnapshotResponse struct {
-	Alias string `json:"alias"`
-	Name  string `json:"name,omitempty"`
-	Error string `json:"error,omitempty"`
+	Alias   string `json:"alias"`
+	Name    string `json:"name,omitempty"`
+	Locator string `json:"locator,omitempty"`
+	Mode    string `json:"mode,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
 type ResumeResponse struct {
@@ -76,12 +83,22 @@ func GetRequest(path string) ([]byte, error) {
 	return json.Marshal(Request{Op: OpGet, Path: path})
 }
 
-func SnapshotRequest(name string) ([]byte, error) {
-	return json.Marshal(Request{Op: OpSnapshot, Name: name})
+func SnapshotRequest(spec backend.SnapshotSpec, mode string) ([]byte, error) {
+	return json.Marshal(Request{
+		Op:     OpSnapshot,
+		Name:   spec.Name,
+		SnapID: spec.ID,
+		Mode:   mode,
+	})
 }
 
-func ResumeRequest(alias string) ([]byte, error) {
-	return json.Marshal(Request{Op: OpResume, Alias: alias})
+func ResumeRequest(alias, locator, mode string) ([]byte, error) {
+	return json.Marshal(Request{
+		Op:      OpResume,
+		Alias:   alias,
+		Locator: locator,
+		Mode:    mode,
+	})
 }
 
 func TerminateRequest() ([]byte, error) {

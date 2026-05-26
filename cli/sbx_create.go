@@ -47,6 +47,7 @@ func newCreateCmd(ctx context.Context, app *App, g *GlobalFlags) *cobra.Command 
 				Name:      sb.Name,
 				CPUs:      sb.CPUs,
 				MemoryMB:  sb.MemoryMB,
+				Mode:      sb.Mode,
 				CreatedAt: sb.CreatedAt,
 				LastUsed:  sb.CreatedAt,
 			}

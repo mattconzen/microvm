@@ -31,7 +31,7 @@ func (s *stubBackend) CopyFrom(context.Context, backend.Sandbox, string, string)
 	return 0, nil
 }
 func (s *stubBackend) Shell(context.Context, backend.Sandbox, backend.TTY) error { return nil }
-func (s *stubBackend) Snapshot(context.Context, backend.Sandbox, string) (backend.Snapshot, error) {
+func (s *stubBackend) Snapshot(context.Context, backend.Sandbox, backend.SnapshotSpec) (backend.Snapshot, error) {
 	return backend.Snapshot{Provider: s.name}, nil
 }
 func (s *stubBackend) Resume(context.Context, backend.Snapshot, backend.SandboxSpec) (backend.Sandbox, error) {

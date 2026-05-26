@@ -22,17 +22,20 @@ func newSnapshotCmd(ctx context.Context, app *App, g *GlobalFlags) *cobra.Comman
 			if err != nil {
 				return err
 			}
-			sbApi := backend.Sandbox{ID: sb.ID, Provider: sb.Provider, SessionID: sb.SessionID}
-			snap, err := b.Snapshot(ctx, sbApi, name)
+			sbApi := backend.Sandbox{ID: sb.ID, Provider: sb.Provider, SessionID: sb.SessionID, Mode: sb.Mode}
+			snapID := state.NewSnapshotID()
+			snap, err := b.Snapshot(ctx, sbApi, backend.SnapshotSpec{ID: snapID, Name: name})
 			if err != nil {
 				return err
 			}
 			rec := state.Snapshot{
-				ID:              state.NewSnapshotID(),
+				ID:              snapID,
 				SandboxID:       sb.ID,
 				Provider:        b.Name(),
 				TargetSessionID: snap.TargetSessionID,
 				Kind:            snap.Kind,
+				Mode:            snap.Mode,
+				Locator:         snap.Locator,
 				Name:            snap.Name,
 				CreatedAt:       snap.CreatedAt,
 			}
